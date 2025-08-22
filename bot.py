@@ -4,7 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 # ========== CONFIG ==========
-TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TOKEN = "8478512062:AAHtkO3agXgg1JPMloOaMLbd0xmSGF-e_o4"
 user_balance = {}
 
 # ========== LOG ==========
