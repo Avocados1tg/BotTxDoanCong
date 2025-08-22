@@ -24,8 +24,8 @@ def get_player(user_id):
         players[user_id] = Player()
     return players[user_id]
 
-# ===== CÁC TRẠNG THÁI CONVERSATION =====
-CHON_CONVAT, DAT_TIEN_BC, DAT_TIEN_TX = range(3)
+# ===== STATES =====
+CHON_TX, DAT_TIEN_TX, CHON_CONVAT, DAT_TIEN_BC = range(4)
 
 bau_cua_icons = ["🐟 Cá", "🦀 Cua", "🦌 Nai", "🐓 Gà", "🦁 Hổ", "🥒 Bầu"]
 quick_bets = [100, 500, 1000]
@@ -41,95 +41,85 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💰 Xem số dư", callback_data="menu_balance")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        f"👋 Xin chào {user.first_name}!\n"
-        f"💰 Số dư: {player.balance} xu\n"
-        f"Chọn trò chơi:",
-        reply_markup=reply_markup
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            f"👋 Xin chào {user.first_name}!\n💰 Số dư: {player.balance} xu\nChọn trò chơi:",
+            reply_markup=reply_markup
+        )
+    else:
+        await update.message.reply_text(
+            f"👋 Xin chào {user.first_name}!\n💰 Số dư: {player.balance} xu\nChọn trò chơi:",
+            reply_markup=reply_markup
+        )
 
 # ===== TÀI XỈU =====
 async def menu_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     keyboard = [
-        [InlineKeyboardButton(f"{b} 💵", callback_data=f"tx_{b}") for b in quick_bets],
-        [InlineKeyboardButton("Nhập số khác", callback_data="tx_custom")],
+        [InlineKeyboardButton("🎲 Tài", callback_data="tx_tai"),
+         InlineKeyboardButton("🎲 Xỉu", callback_data="tx_xiu")],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
     ]
-    await query.edit_message_text(
-        "🎲 Chọn số tiền cược cho Tài Xỉu:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text("Chọn Tài hay Xỉu:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return CHON_TX
 
-async def handle_tx_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def choose_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user = query.from_user
-    player = get_player(user.id)
-
-    data = query.data
-    if data.startswith("tx_") and data != "tx_custom":
-        bet = int(data.split("_")[1])
-        context.user_data["tx_bet"] = bet
-        await start_tx_game(update, context)
-    elif data == "tx_custom":
-        await query.edit_message_text("💰 Nhập số tiền cược bạn muốn:")
-        return DAT_TIEN_TX
+    choice = query.data.split("_")[1]
+    context.user_data["tx_choice"] = choice
+    keyboard = [
+        [InlineKeyboardButton(f"{b} 💵", callback_data=f"txbet_{b}") for b in quick_bets],
+        [InlineKeyboardButton("Nhập số khác", callback_data="txbet_custom")],
+        [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
+    ]
+    await query.edit_message_text("Chọn số tiền cược:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return DAT_TIEN_TX
 
 async def input_tx_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     player = get_player(user.id)
-    try:
-        bet = int(update.message.text)
-    except:
-        await update.message.reply_text("❌ Vui lòng nhập số hợp lệ!")
-        return DAT_TIEN_TX
+    if hasattr(update, 'callback_query') and update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data.startswith("txbet_") and data != "txbet_custom":
+            bet = int(data.split("_")[1])
+        else:
+            return DAT_TIEN_TX
+    else:
+        try:
+            bet = int(update.message.text)
+        except:
+            await update.message.reply_text("❌ Nhập số tiền hợp lệ!")
+            return DAT_TIEN_TX
 
     if bet <= 0 or bet > player.balance:
-        await update.message.reply_text(f"❌ Tiền cược không hợp lệ! Số dư: {player.balance} xu")
+        await update.message.reply_text(f"❌ Tiền cược không hợp lệ! Số dư: {player.balance}")
         return DAT_TIEN_TX
 
-    context.user_data["tx_bet"] = bet
-    await start_tx_game(update, context)
-    return ConversationHandler.END
-
-async def start_tx_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    player = get_player(user.id)
-    bet = context.user_data.get("tx_bet", 100)
-
+    choice = context.user_data.get("tx_choice")
     dice = [random.randint(1,6) for _ in range(3)]
     total = sum(dice)
-    # random chọn Tài hoặc Xỉu cho demo
-    choice = random.choice(["tai","xiu"])
     result = "tai" if total >= 11 else "xiu"
-
     if choice == result:
         player.balance += bet
-        player.tx_win += 1
         outcome = f"🎉 Bạn thắng! +{bet} xu"
     else:
         player.balance -= bet
-        player.tx_lose += 1
         outcome = f"💀 Bạn thua! -{bet} xu"
 
     keyboard = [
         [InlineKeyboardButton("🔁 Chơi tiếp", callback_data="menu_tx")],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
     ]
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            f"🎲 Kết quả: {dice} (Tổng: {total} → {'Tài' if result=='tai' else 'Xỉu'})\n"
-            f"{outcome}\n💰 Số dư: {player.balance} xu",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    text = f"🎲 Kết quả: {dice} (Tổng: {total} → {'Tài' if result=='tai' else 'Xỉu'})\n{outcome}\n💰 Số dư: {player.balance}"
+    if hasattr(update, 'callback_query') and update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await update.message.reply_text(
-            f"🎲 Kết quả: {dice} (Tổng: {total} → {'Tài' if result=='tai' else 'Xỉu'})\n"
-            f"{outcome}\n💰 Số dư: {player.balance} xu",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
 
 # ===== BẦU CUA =====
 async def menu_bc(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -141,12 +131,10 @@ async def menu_bc(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton(bau_cua_icons[2], callback_data="bc_2")],
         [InlineKeyboardButton(bau_cua_icons[3], callback_data="bc_3"),
          InlineKeyboardButton(bau_cua_icons[4], callback_data="bc_4"),
-         InlineKeyboardButton(bau_cua_icons[5], callback_data="bc_5")]
+         InlineKeyboardButton(bau_cua_icons[5], callback_data="bc_5")],
+        [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
     ]
-    await query.edit_message_text(
-        "🎲 Chọn 3 con vật bạn muốn đặt cược (bấm từng con vật 3 lần):",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text("Chọn 3 con vật (bấm từng con):", reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data["bc_chosen"] = []
     return CHON_CONVAT
 
@@ -160,38 +148,35 @@ async def choose_bc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["bc_chosen"] = chosen
 
     if len(chosen) < 3:
-        await query.edit_message_text(
-            f"✅ Bạn đã chọn: {[bau_cua_icons[i] for i in chosen]}\nChọn thêm {3-len(chosen)} con:",
-            reply_markup=query.message.reply_markup
-        )
+        await query.edit_message_text(f"✅ Chọn: {[bau_cua_icons[i] for i in chosen]}\nChọn thêm {3-len(chosen)} con:", reply_markup=query.message.reply_markup)
         return CHON_CONVAT
     else:
-        # Hiện nút nhanh đặt cược
         keyboard = [
             [InlineKeyboardButton(f"{b} 💵", callback_data=f"bcbet_{b}") for b in quick_bets],
-            [InlineKeyboardButton("Nhập số khác", callback_data="bcbet_custom")]
+            [InlineKeyboardButton("Nhập số khác", callback_data="bcbet_custom")],
+            [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
         ]
-        await query.edit_message_text(
-            f"✅ Bạn đã chọn 3 con: {[bau_cua_icons[i] for i in chosen]}\nChọn số tiền cược:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await query.edit_message_text(f"✅ Chọn 3 con: {[bau_cua_icons[i] for i in chosen]}\nChọn số tiền cược:", reply_markup=InlineKeyboardMarkup(keyboard))
         return DAT_TIEN_BC
 
 async def input_bc_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if isinstance(update, Update) and update.message:
-        text = update.message.text
+    user = update.effective_user
+    player = get_player(user.id)
+    if hasattr(update, 'callback_query') and update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data.startswith("bcbet_") and data != "bcbet_custom":
+            bet = int(data.split("_")[1])
+        else:
+            return DAT_TIEN_BC
+    else:
         try:
-            bet = int(text)
+            bet = int(update.message.text)
         except:
             await update.message.reply_text("❌ Nhập số tiền hợp lệ!")
             return DAT_TIEN_BC
-    else:
-        query = update.callback_query
-        await query.answer()
-        bet = int(query.data.split("_")[1])
 
-    user = update.effective_user
-    player = get_player(user.id)
     if bet <=0 or bet>player.balance:
         await update.message.reply_text(f"❌ Tiền cược không hợp lệ! Số dư: {player.balance}")
         return DAT_TIEN_BC
@@ -211,19 +196,14 @@ async def input_bc_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔁 Chơi tiếp", callback_data="menu_bc")],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
     ]
+    text = f"🎲 Kết quả xúc xắc: {rolls_icons}\n{outcome}\n💰 Số dư: {player.balance}"
     if hasattr(update, 'callback_query') and update.callback_query:
-        await update.callback_query.edit_message_text(
-            f"🎲 Kết quả xúc xắc: {rolls_icons}\n{outcome}\n💰 Số dư: {player.balance}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await update.message.reply_text(
-            f"🎲 Kết quả xúc xắc: {rolls_icons}\n{outcome}\n💰 Số dư: {player.balance}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
-# ===== MENU / BALANCE =====
+# ===== MENU BALANCE =====
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -234,6 +214,7 @@ async def callback_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await start(update, context)
+    return ConversationHandler.END
 
 # ===== MAIN =====
 def main():
@@ -243,24 +224,29 @@ def main():
         entry_points=[CallbackQueryHandler(menu_bc, pattern="^menu_bc$")],
         states={
             CHON_CONVAT: [CallbackQueryHandler(choose_bc, pattern="^bc_")],
-            DAT_TIEN_BC: [CallbackQueryHandler(input_bc_bet, pattern="^bcbet_"), 
-                           MessageHandler(filters.TEXT & ~filters.COMMAND, input_bc_bet)]
+            DAT_TIEN_BC: [
+                CallbackQueryHandler(input_bc_bet, pattern="^bcbet_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, input_bc_bet)
+            ]
         },
-        fallbacks=[],
+        fallbacks=[]
     )
 
     conv_tx = ConversationHandler(
         entry_points=[CallbackQueryHandler(menu_tx, pattern="^menu_tx$")],
         states={
-            DAT_TIEN_TX: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_tx_bet)]
+            CHON_TX: [CallbackQueryHandler(choose_tx, pattern="^tx_")],
+            DAT_TIEN_TX: [
+                CallbackQueryHandler(input_tx_bet, pattern="^txbet_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, input_tx_bet)
+            ]
         },
-        fallbacks=[],
+        fallbacks=[]
     )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_bc)
     app.add_handler(conv_tx)
-    app.add_handler(CallbackQueryHandler(handle_tx_choice, pattern="^tx_"))
     app.add_handler(CallbackQueryHandler(show_balance, pattern="^menu_balance$"))
     app.add_handler(CallbackQueryHandler(callback_menu, pattern="^menu$"))
 
