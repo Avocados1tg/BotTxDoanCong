@@ -244,7 +244,7 @@ def main():
         fallbacks=[]
     )
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cobac", start))
     app.add_handler(conv_bc)
     app.add_handler(conv_tx)
     app.add_handler(CallbackQueryHandler(show_balance, pattern="^menu_balance$"))
