@@ -187,4 +187,49 @@ async def option_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"{outcome}\nSố dư: {users[user_id]['vnd']:,} VND")
 
     # Đua Xúc Xắc
-    elif game=="dauxucxac" and data.startswith("d
+    elif game=="dauxucxac" and data.startswith("dauxucxac_"):
+        choice = int(data.split("_")[1])
+        dice = random.randint(1,6)
+        if choice == dice:
+            users[user_id]["vnd"] += bet*5
+            outcome = f"🎉 Đoán đúng! +{bet*5:,} VND (Xúc xắc: {dice})"
+        else:
+            users[user_id]["vnd"] -= bet
+            outcome = f"😢 Sai! -{bet:,} VND (Xúc xắc: {dice})"
+        save_data()
+        await query.edit_message_text(f"{outcome}\nSố dư: {users[user_id]['vnd']:,} VND")
+
+    # Bầu Cua
+    elif game=="baucua" and data.startswith("baucua_"):
+        rolls = [random.choice(["nai","bầu","cá","gà","tôm","cua"]) for _ in range(3)]
+        choices = ["nai","bầu","cá"]  # mặc định 3 con
+        matches = sum([1 for f in rolls if f in choices])
+        if matches > 0:
+            users[user_id]["vnd"] += bet * matches
+            outcome = f"🎉 Thắng! +{bet*matches:,} VND (Xúc xắc: {rolls})"
+        else:
+            users[user_id]["vnd"] -= bet
+            outcome = f"😢 Thua! -{bet:,} VND (Xúc xắc: {rolls})"
+        save_data()
+        await query.edit_message_text(f"{outcome}\nSố dư: {users[user_id]['vnd']:,} VND")
+
+    return CHOOSING_GAME
+
+# Main
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("cobac", cobac)],
+        states={
+            CHOOSING_GAME: [CallbackQueryHandler(game_callback)],
+            BET_CHOICE: [CallbackQueryHandler(bet_choice_callback)],
+            INPUT_BET: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_bet)],
+            CHOOSING_OPTION: [CallbackQueryHandler(option_callback)],
+        },
+        fallbacks=[]
+    )
+
+    app.add_handler(conv_handler)
+    print("Mini Casino VND Bot đang chạy với nút ấn /cobac...")
+    app.run_polling()
