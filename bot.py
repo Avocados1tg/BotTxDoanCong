@@ -56,6 +56,12 @@ async def cobac(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("🎰 Mini Casino Ultimate! Chọn trò chơi:", reply_markup=reply_markup)
     return CHOOSING_GAME
 
+# --- Handler menu chính ---
+async def menu_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    return await cobac(update, context)
+
 # --- History / Top / Daily ---
 async def history_callback(update, context):
     query=update.callback_query
@@ -257,14 +263,15 @@ async def play_game(update, context):
 # --- Main ---
 if __name__=="__main__":
     app=ApplicationBuilder().token(BOT_TOKEN).build()
-    conv_handler=ConversationHandler(
+    conv_handler = ConversationHandler(
         entry_points=[CommandHandler("cobac", cobac)],
         states={
             CHOOSING_GAME:[
                 CallbackQueryHandler(history_callback, pattern="history"),
                 CallbackQueryHandler(top_callback, pattern="top"),
                 CallbackQueryHandler(daily_callback, pattern="daily"),
-                CallbackQueryHandler(game_ui_callback, pattern="^(taixiu|rutbai|roulette|dauxucxac|baucua)$")
+                CallbackQueryHandler(game_ui_callback, pattern="^(taixiu|rutbai|roulette|dauxucxac|baucua)$"),
+                CallbackQueryHandler(menu_callback, pattern="cobac")  # <-- fix nút menu
             ],
             CHOOSING_OPTION:[
                 CallbackQueryHandler(option_bet_callback),
