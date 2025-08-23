@@ -2,7 +2,7 @@ import asyncio, random, json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+BOT_TOKEN = "8478512062:AAHtkO3agXgg1JPMloOaMLbd0xmSGF-e_o4"
 CHOOSING_GAME, ENTER_BET, CHOOSING_OPTION = range(3)
 
 # --- Data ---
