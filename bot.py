@@ -1,5 +1,4 @@
-# ultimate_mini_casino_complete.py
-import os, random, json, time
+import os, random, json, time, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 
@@ -19,13 +18,12 @@ def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(users, f)
 
-# --- Menu ---
+# --- Menu helper ---
 def menu_keyboard(extra_buttons=None):
     keyboard = extra_buttons if extra_buttons else []
     keyboard.append([InlineKeyboardButton("🏠 Menu chính", callback_data="cobac")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- Add history ---
 def add_history(user_id, game, choice, bet, outcome):
     if "history" not in users[user_id]:
         users[user_id]["history"]=[]
@@ -58,21 +56,17 @@ async def cobac(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("🎰 Mini Casino Ultimate! Chọn trò chơi:", reply_markup=reply_markup)
     return CHOOSING_GAME
 
-# --- History ---
-async def history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- History / Top / Daily ---
+async def history_callback(update, context):
     query=update.callback_query
     await query.answer()
     user_id = str(query.from_user.id)
     hist = users[user_id].get("history",[])
-    if not hist:
-        text="📜 Chưa có lịch sử chơi nào."
-    else:
-        text="📜 Lịch sử 10 lượt gần nhất:\n" + "\n".join(hist)
+    text = "📜 Lịch sử 10 lượt gần nhất:\n" + ("\n".join(hist) if hist else "Chưa có lịch sử chơi nào.")
     await query.edit_message_text(text, reply_markup=menu_keyboard())
     return CHOOSING_GAME
 
-# --- Top 5 ---
-async def top_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def top_callback(update, context):
     query=update.callback_query
     await query.answer()
     top = sorted(users.items(), key=lambda x:x[1]["vnd"], reverse=True)[:5]
@@ -82,8 +76,7 @@ async def top_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, reply_markup=menu_keyboard())
     return CHOOSING_GAME
 
-# --- Daily reward ---
-async def daily_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def daily_callback(update, context):
     query=update.callback_query
     await query.answer()
     user_id = str(query.from_user.id)
@@ -101,7 +94,7 @@ async def daily_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CHOOSING_GAME
 
 # --- Nạp / Rút ---
-async def nap_rut(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def nap_rut(update, context):
     msg = update.message.text
     user_id = str(update.message.from_user.id)
     if user_id not in users:
@@ -126,123 +119,140 @@ async def nap_rut(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             await update.message.reply_text("❌ Cú pháp: /rut 100000", reply_markup=menu_keyboard())
 
-# --- Game callback ---
-async def game_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Game UI với theme màu ---
+async def game_ui_callback(update, context):
     query = update.callback_query
     await query.answer()
     user_id = str(query.from_user.id)
     game = query.data
     users[user_id]["current_game"] = game
-    # Chọn phương án
-    if game == "taixiu":
-        keyboard = [
-            [InlineKeyboardButton("🎲 Tài", callback_data="Tai")],
-            [InlineKeyboardButton("🎲 Xỉu", callback_data="Xiu")]
-        ]
-    elif game == "rutbai":
-        keyboard = [
-            [InlineKeyboardButton("🂡 Cao", callback_data="Cao")],
-            [InlineKeyboardButton("🂱 Thấp", callback_data="Thap")]
-        ]
-    elif game == "roulette":
-        keyboard = [
-            [InlineKeyboardButton("🔴 Đỏ", callback_data="Do")],
-            [InlineKeyboardButton("⚫ Đen", callback_data="Den")]
-        ]
-    elif game == "dauxucxac":
-        keyboard = [
-            [InlineKeyboardButton("🎯 1", callback_data="1")],
-            [InlineKeyboardButton("🎯 2", callback_data="2")],
-            [InlineKeyboardButton("🎯 3", callback_data="3")]
-        ]
-    elif game == "baucua":
-        keyboard = [
-            [InlineKeyboardButton("🐟", callback_data="ca"), InlineKeyboardButton("🐄", callback_data="bo")],
-            [InlineKeyboardButton("🐅", callback_data="ho"), InlineKeyboardButton("🦑", callback_data="tom")],
-            [InlineKeyboardButton("🦆", callback_data="ga"), InlineKeyboardButton("🐏", callback_data="cuu")]
-        ]
-    await query.edit_message_text("Chọn phương án:", reply_markup=menu_keyboard(keyboard))
+    bet_values=[10000,50000,100000]
+    buttons=[]
+
+    if game=="baucua":
+        options=["ca","bo","ho","tom","ga","cuu"]
+        emoji_map={"ca":"🐟","bo":"🐄","ho":"🐅","tom":"🦑","ga":"🦆","cuu":"🐏"}
+        colors=["🟦","🟩","🟧","🟥","🟪","🟨"]
+        for i in range(0,6,3):
+            row=[]
+            for idx, option in enumerate(options[i:i+3]):
+                row.append(InlineKeyboardButton(f"{colors[i+idx]} {emoji_map[option]} + {bet_values[0]:,} VND", 
+                                                callback_data=f"{option}_{bet_values[0]}"))
+            buttons.append(row)
+        buttons.append([InlineKeyboardButton("📝 Nhập số khác", callback_data="bet_custom")])
+        await query.edit_message_text("🐟 Bầu Cua 3 con! Chọn con + tiền cược:", reply_markup=InlineKeyboardMarkup(buttons))
+        return CHOOSING_OPTION
+
+    game_options={"taixiu":["Tai","Xiu"],"rutbai":["Cao","Thap"],"roulette":["Do","Den"],"dauxucxac":["1","2","3"]}
+    game_colors={"Tai":"🟦","Xiu":"🟩","Cao":"🟦","Thap":"🟩","Do":"🟥","Den":"⬛","1":"🟦","2":"🟧","3":"🟩"}
+    for option in game_options[game]:
+        row=[InlineKeyboardButton(f"{game_colors[option]} {option} + {b:,} VND", callback_data=f"{option}_{b}") for b in bet_values]
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton("📝 Nhập số khác", callback_data="bet_custom")])
+    await query.edit_message_text("Chọn phương án + số VND cược:", reply_markup=InlineKeyboardMarkup(buttons))
     return CHOOSING_OPTION
 
-# --- Option callback ---
-async def option_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Chọn phương án + tiền ---
+async def option_bet_callback(update, context):
     query = update.callback_query
     await query.answer()
     user_id = str(query.from_user.id)
-    choice = query.data
-    users[user_id]["choice"] = choice
-    await query.edit_message_text(f"Bạn chọn: {choice}\nNhập số VND muốn cược:")
-    return INPUT_BET
-
-# --- Input bet ---
-async def input_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    try:
-        bet = int(update.message.text)
-        if bet <= 0 or bet > users[user_id]["vnd"]:
-            await update.message.reply_text("❌ Số VND không hợp lệ hoặc vượt quá số dư.", reply_markup=menu_keyboard())
-            return INPUT_BET
-        users[user_id]["bet"] = bet
-        await play_game(update, context)
-    except:
-        await update.message.reply_text("❌ Vui lòng nhập số VND hợp lệ.", reply_markup=menu_keyboard())
+    data = query.data
+    if data=="bet_custom":
+        await query.edit_message_text("Nhập số VND muốn cược:")
         return INPUT_BET
+    choice, bet = data.split("_")
+    users[user_id]["choice"]=choice
+    users[user_id]["bet"]=int(bet)
+    save_data()
+    return await play_game(update, context)
 
-# --- Play game ---
-async def play_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    game = users[user_id]["current_game"]
-    choice = users[user_id]["choice"]
-    bet = users[user_id]["bet"]
-    if users[user_id]["consecutive_loss"]>=3:
-        bet *=2
-        users[user_id]["consecutive_loss"]=0
-    win = False
-    outcome_text = ""
+# --- Nhập tiền tùy chỉnh ---
+async def input_bet(update, context):
+    user_id=str(update.message.from_user.id)
+    try:
+        amount=int(update.message.text)
+        if amount<=0 or amount>users[user_id]["vnd"]:
+            raise ValueError
+        users[user_id]["bet"]=amount
+        save_data()
+        await update.message.reply_text(f"✅ Bạn đặt {amount:,} VND. Bấm chọn phương án chơi.")
+    except:
+        await update.message.reply_text("❌ Số VND không hợp lệ.")
+    return CHOOSING_OPTION
+
+# --- Chơi game chung ---
+async def play_game(update, context):
+    if hasattr(update,"callback_query"):
+        query=update.callback_query
+        await query.answer()
+    user_id=str(update.effective_user.id)
+    game=users[user_id]["current_game"]
+    choice=users[user_id].get("choice","Tai")
+    bet=users[user_id].get("bet",10000)
     
+    outcome_text=""
+    win=False
+
     if game=="taixiu":
-        dice=sum(random.randint(1,6) for _ in range(3))
-        result="Tai" if dice>10 else "Xiu"
-        win = (choice==result)
-        outcome_text = f"{result} ({dice})"
-    elif game=="rutbai":
-        player=random.randint(1,13)
-        bot=random.randint(1,13)
-        result="Cao" if player>bot else "Thap"
-        win = (choice==result)
-        outcome_text = f"Bạn {player} - Bot {bot}"
-    elif game=="roulette":
-        color=random.choice(["Do","Den"])
-        win=(choice==color)
-        outcome_text=color
-    elif game=="dauxucxac":
         dice=[random.randint(1,6) for _ in range(3)]
+        total=sum(dice)
+        emoji_map=["","⚀","⚁","⚂","⚃","⚄","⚅"]
+        dice_display=" ".join([emoji_map[d] for d in dice])
+        outcome_text=f"{dice_display} = {total}"
+        if (total>10 and choice=="Tai") or (total<=10 and choice=="Xiu"):
+            win=True
+    elif game=="dauxucxac":
+        rolls=int(choice)
+        dice=[random.randint(1,6) for _ in range(rolls)]
+        await asyncio.sleep(0.8)
+        emoji_map=["","⚀","⚁","⚂","⚃","⚄","⚅"]
+        dice_display=" ".join([emoji_map[d] for d in dice])
+        total=sum(dice)
+        outcome_text=f"{dice_display} = {total}"
         win=int(choice) in dice
-        outcome_text=",".join(map(str,dice))
+    elif game=="rutbai":
+        card=random.randint(1,13)
+        emoji_card=["🂡","🂱","🂲","🂳","🂴","🂵","🂶","🂷","🂸","🂹","🂺","🂻","🂽"]
+        outcome_text=f"Quân bài: {emoji_card[(card-1)%13]} ({card})"
+        if (card>7 and choice=="Cao") or (card<=7 and choice=="Thap"):
+            win=True
+    elif game=="roulette":
+        num=random.randint(0,36)
+        color="Do" if num%2 else "Den"
+        outcome_text=f"🎯 Roulette: {num} ({color})"
+        if color==choice:
+            win=True
     elif game=="baucua":
         dice=[random.choice(["ca","bo","ho","tom","ga","cuu"]) for _ in range(3)]
-        win=choice in dice
-        outcome_text=",".join(dice)
-        
+        emoji_map={"ca":"🐟","bo":"🐄","ho":"🐅","tom":"🦑","ga":"🦆","cuu":"🐏"}
+        dice_display=" ".join([emoji_map[d] for d in dice])
+        outcome_text=f"{dice_display}"
+        if choice in dice:
+            win=True
+
+    if hasattr(update,"callback_query"):
+        await query.edit_message_text("🎲 Đang chơi game...")
+        await asyncio.sleep(0.8)
+
     if win:
-        users[user_id]["vnd"] += bet
+        users[user_id]["vnd"]+=bet
         users[user_id]["consecutive_loss"]=0
         outcome="Thắng"
     else:
-        users[user_id]["vnd"] -= bet
+        users[user_id]["vnd"]-=bet
         users[user_id]["consecutive_loss"]+=1
         outcome="Thua"
-    users[user_id]["vip_level"]=1 + users[user_id]["vnd"]//1000000
-    add_history(user_id, game, choice, bet, outcome)
-    save_data()
-    await update.message.reply_text(f"Kết quả: {outcome_text}\nBạn {outcome}! Số dư: {users[user_id]['vnd']:,} VND", reply_markup=menu_keyboard())
-    return CHOOSING_GAME
 
-# --- Restart ---
-async def restart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query=update.callback_query
-    await query.answer()
-    return await cobac(update, context)
+    users[user_id]["vip_level"]=1 + users[user_id]["vnd"]//1000000
+    add_history(user_id,game,choice,bet,outcome)
+    save_data()
+    text=f"Kết quả: {outcome_text}\nBạn {outcome}! Số dư: {users[user_id]['vnd']:,} VND"
+    if hasattr(update,"callback_query"):
+        await query.edit_message_text(text, reply_markup=menu_keyboard())
+    else:
+        await update.message.reply_text(text, reply_markup=menu_keyboard())
+    return CHOOSING_GAME
 
 # --- Main ---
 if __name__=="__main__":
@@ -254,16 +264,15 @@ if __name__=="__main__":
                 CallbackQueryHandler(history_callback, pattern="history"),
                 CallbackQueryHandler(top_callback, pattern="top"),
                 CallbackQueryHandler(daily_callback, pattern="daily"),
-                CallbackQueryHandler(restart_callback, pattern="cobac"),
-                CallbackQueryHandler(game_callback)
+                CallbackQueryHandler(game_ui_callback, pattern="^(taixiu|rutbai|roulette|dauxucxac|baucua)$")
             ],
-            CHOOSING_OPTION:[CallbackQueryHandler(option_callback)],
-            INPUT_BET:[MessageHandler(filters.TEXT & ~filters.COMMAND, input_bet)],
+            CHOOSING_OPTION:[
+                CallbackQueryHandler(option_bet_callback),
+            ],
+            INPUT_BET:[MessageHandler(filters.TEXT & ~filters.COMMAND, input_bet)]
         },
-        fallbacks=[MessageHandler(filters.TEXT & ~filters.COMMAND, nap_rut)]
+        fallbacks=[CommandHandler("nap", nap_rut), CommandHandler("rut", nap_rut)]
     )
     app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("nap", nap_rut))
-    app.add_handler(CommandHandler("rut", nap_rut))
-    print("Ultimate Mini Casino Full Bot đang chạy...")
+    print("Bot started")
     app.run_polling()
