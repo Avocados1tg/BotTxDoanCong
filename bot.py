@@ -23,6 +23,7 @@ DB_PATH = os.getenv("DB_PATH", "casino_full.db")
 
 DEFAULT_SWITCHES = {
     "taixiu": True,
+    "coinflip": True,  # bật game mới
     "dice": True,
     "roulette": True,
     "troll": True,
@@ -300,7 +301,7 @@ async def on_menu_press(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "📜 Lệnh cơ bản:\n"
-        "/start – khởi tạo ví\n"
+        "/srart – khởi tạo ví\n"
         "/menu – menu nút\n"
         "/whoami – xem user_id\n"
         "/balance (/bal) – xem số dư\n"
@@ -377,6 +378,51 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(text))
 # ========== Part 2/3 (paste immediately after Part 1) ==========
 # ---------- continuing game functions ----------
+# ========== GAME MỚI: COIN FLIP ==========
+import random
+
+def flip_coin() -> str:
+    return random.choice(["ngua", "sap"])
+
+async def cmd_bet_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not get_switch("coin"):
+        await update.message.reply_text("Game Coin Flip đang tắt.")
+        return
+    u = get_user(update.effective_user.id)
+    if not u:
+        await update.message.reply_text("Bạn chưa có ví. Gõ /movi để tạo.")
+        return
+    uid, _, balance, *_ = u
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Cú pháp: /coin <tiền> <Ngua|Sap>")
+        return
+    try:
+        amt = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Tiền cược phải là số nguyên.")
+        return
+    choice = context.args[1].lower()
+    if choice not in {"ngua", "sap"}:
+        await update.message.reply_text("Chọn 'ngua' hoặc 'sap'.")
+        return
+
+    msg = clamp_bet(amt)
+    if msg:
+        await update.message.reply_text(msg)
+        return
+    if amt > balance:
+        await update.message.reply_text("Không đủ coin.")
+        return
+
+    result = flip_coin()
+    win = (choice == result)
+    payout, new_bal = await _apply_bet(update, "coin", amt, choice, win, result, uid, balance)
+
+    await update.message.reply_text(
+        f"🪙 Kết quả: {result.upper()}\nBạn {'Ăn May Thắng À???' if win else 'Ngu như cái lồn bò!!!'} {'+' if win else ''}{payout} coin.\nSố dư mới: {new_bal} 💰"
+    )
+    # ========== GAME MỚI: TaiXiu ==========
 def roll_3dice() -> tuple[int, tuple[int, int, int]]:
     d1 = _rand(6) + 1
     d2 = _rand(6) + 1
@@ -398,9 +444,9 @@ async def _troll_feedback(update: Update, uid: int, win: bool, bet_amt: int = 0,
         return
     losses = get_recent_losses(uid, 3)
     if losses >= 3:
-        await update.message.reply_text("🤡 Thua 3 kèo rồi đó nha… đổi gió coi!")
+        await update.message.reply_text("🤡 ÓC lồn chơi ngu dữ mày deo biết đổi trò khác à đồ ngu???")
     if win and payout >= bet_amt * 2 and bet_amt > 0:
-        await update.message.reply_text("🤑 Ăn đậm luôn! Cho xin bí kíp?")
+        await update.message.reply_text("🤑 Ăn may kìa trời má nó rùa sao mà rùa!!!")
 
 
 async def _apply_bet(update: Update, game: str, amt: int, choice: str, win: bool, result_str: str, uid: int, cur_balance: int):
@@ -853,6 +899,8 @@ def main():
     app.add_handler(CommandHandler("bet_taixiu", cmd_bet_taixiu))
     app.add_handler(CommandHandler("bet_dice", cmd_bet_dice))
     app.add_handler(CommandHandler("bet_roulette", cmd_bet_roulette))
+    app.add_handler(CommandHandler("coin", cmd_coin))
+
 
     # Shop
     app.add_handler(CommandHandler("shop", cmd_shop))
