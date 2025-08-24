@@ -445,7 +445,7 @@ async def _troll_feedback(update: Update, uid: int, win: bool, bet_amt: int = 0,
     losses = get_recent_losses(uid, 3)
     if losses >= 2:
         await update.message.reply_text("🤡 ÓC lồn chơi ngu dữ mày deo biết đổi trò khác à đồ ngu???")
-    if win and payout >= 2 bet_amt * 2 and bet_amt > 0:
+    if win and payout >= bet_amt * 2 and bet_amt > 0:
         await update.message.reply_text("🤑 Ăn may kìa trời má nó rùa sao mà rùa!!!")
 
 
