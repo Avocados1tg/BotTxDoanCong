@@ -309,6 +309,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/leaderboard – top coin\n"
         "/weekly – top tuần (tham khảo)\n\n"
         "🎲 Cược game:\n"
+        "/coin <tiền> <ngua|sap>\n"
         "/bet_taixiu <tiền> <tai|xiu>\n"
         "/bet_dice <tiền> <1-6>\n"
         "/bet_roulette <tiền> <red|black|even|odd|0-36>\n\n"
@@ -384,7 +385,7 @@ import random
 def flip_coin() -> str:
     return random.choice(["ngua", "sap"])
 
-async def cmd_bet_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_coin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not get_switch("coin"):
         await update.message.reply_text("Game Coin Flip đang tắt.")
         return
