@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-bot.py — Part 1/2
-Paste Part 2 ngay sau phần này để có file hoàn chỉnh.
+bot.py — FULL (part 1/3)
+Paste part 2 then part 3 right after this to get a full file.
 """
 from __future__ import annotations
 import os
@@ -375,8 +375,7 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, (username, bal) in enumerate(top, start=1):
         text.append(f"{i}. {username or 'Người chơi'} – {bal}💰")
     await update.message.reply_text("\n".join(text))
-# ========== Part 2/2 (paste IMMEDIATELY after Part 1) ==========
-
+# ========== Part 2/3 (paste immediately after Part 1) ==========
 # ---------- continuing game functions ----------
 def roll_3dice() -> tuple[int, tuple[int, int, int]]:
     d1 = _rand(6) + 1
@@ -633,8 +632,7 @@ async def cmd_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for name, price, when in items:
         text.append(f"- {name} (giá {price}) – {when}")
     await update.message.reply_text("\n".join(text))
-
-
+# ========== Part 3/3 (paste after Part 2) ==========
 # ========== SOCIAL (gift/transfer) ==========
 async def _transfer_generic(update: Update, context: ContextTypes.DEFAULT_TYPE, verb: str):
     if len(context.args) < 2:
@@ -735,6 +733,19 @@ async def cmd_quest_claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🎁 Nhận thưởng quest: +{rng} coin! Số dư: {new_bal}💰")
 
 
+# ========== WEEKLY (missing earlier) ==========
+async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Simple weekly leaderboard (uses current balances as proxy)
+    top = leaderboard(10)
+    if not top:
+        await update.message.reply_text("Chưa có dữ liệu cho bảng tuần.")
+        return
+    text = ["📅 BẢNG TUẦN (Top hiện tại):"]
+    for i, (username, bal) in enumerate(top, start=1):
+        text.append(f"{i}. {username or 'Người chơi'} — {bal}💰")
+    await update.message.reply_text("\n".join(text))
+
+
 # ========== ADMIN ==========
 def _is_owner(user_id: int) -> bool:
     return OWNER_ID and user_id == OWNER_ID
@@ -815,10 +826,6 @@ async def cmd_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ========== FALLBACKS & MAIN ==========
-async def cmd_rules_small(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Random minh bạch.\n❌ Không dùng tiền thật.\n🧠 Vui là chính — chơi có kiểm soát.")
-
-
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Không hiểu lệnh. Gõ /help.")
 
