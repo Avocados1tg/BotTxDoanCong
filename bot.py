@@ -1,251 +1,591 @@
-import asyncio, random, json, os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Telegram Bot: "Trùm Cá Cược" (SAFE VERSION)
+— Chỉ dùng COIN ẢO để giải trí. KHÔNG TIỀN THẬT, KHÔNG CASH-OUT.
+— Bạn tự chịu trách nhiệm tuân thủ pháp luật địa phương và quy định của Telegram.
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")  # token từ biến môi trường
-CHOOSING_GAME, CHOOSING_OPTION, ENTER_BET = range(3)
+Yêu cầu:
+- Python 3.10+
+- Thư viện: python-telegram-bot>=20.0
+  cài: pip install python-telegram-bot==21.4
 
-# --- Data ---
-users = {}
-data_file = "users.json"
+Chạy bot:
+1) Đặt token bot vào biến môi trường BOT_TOKEN (hoặc sửa hằng số ở dưới cho nhanh — KHÔNG KHUYẾN NGHỊ commit công khai).
+   - Windows (PowerShell):  $env:BOT_TOKEN = "123456:ABC..."
+   - Linux/macOS:          export BOT_TOKEN="123456:ABC..."
+2) python bot.py
 
-def load_data():
-    global users
-    try:
-        with open(data_file, "r", encoding="utf-8") as f:
-            users = json.load(f)
-    except:
-        users = {}
+Tính năng chính:
+- /start, /help, /rules
+- /register: tạo tài khoản coin ảo (nếu /start không auto tạo)
+- /balance (hoặc /bal): xem số dư
+- /daily: nhận thưởng ngày (cooldown 24h)
+- /leaderboard: top giàu nhất
+- /bet_taixiu <tiền> <tai|xiu>
+- /bet_dice <tiền> <1-6>  (đoán 1 mặt xúc xắc, ăn 5x)
+- /bet_roulette <tiền> <red|black|even|odd|0-36>
+- Admin (OWNER_ID): /give @user <tiền>, /setbal @user <tiền>, /toggle <game> on|off
 
-def save_data():
-    with open(data_file, "w", encoding="utf-8") as f:
-        json.dump(users, f, indent=2)
+Lưu ý công bằng:
+- Random chuẩn từ Python's secrets (crypto-secure) khi có thể; fallback random.SystemRandom.
+- Lưu lịch sử cược vào SQLite: casino.db
 
-def add_history(user_id, game, choice, bet, outcome):
-    users[user_id].setdefault("history", [])
-    users[user_id]["history"].append({"game":game,"choice":choice,"bet":bet,"outcome":outcome})
-    if len(users[user_id]["history"])>10:
-        users[user_id]["history"].pop(0)
+"""
 
-# --- Keyboards ---
-def menu_keyboard():
-    buttons = [
-        [InlineKeyboardButton("🎲 Chơi game", callback_data="play_game")],
-        [InlineKeyboardButton("💰 Số dư", callback_data="balance")],
-        [InlineKeyboardButton("📜 Lịch sử", callback_data="history")],
-        [InlineKeyboardButton("🏆 Top 5", callback_data="top")],
-        [InlineKeyboardButton("🎁 Daily", callback_data="daily")]
-    ]
-    return InlineKeyboardMarkup(buttons)
+from __future__ import annotations
+import asyncio
+import os
+import re
+import sqlite3
+from datetime import datetime, timedelta, date
+from typing import Optional, Tuple
 
-def game_keyboard():
-    buttons = [
-        [InlineKeyboardButton("Tài Xỉu", callback_data="taixiu")],
-        [InlineKeyboardButton("Đua Xúc Xắc", callback_data="dauxucxac")],
-        [InlineKeyboardButton("Bầu Cua", callback_data="baucua")],
-        [InlineKeyboardButton("Roulette", callback_data="roulette")],
-        [InlineKeyboardButton("Rút Bài", callback_data="rutbai")]
-    ]
-    return InlineKeyboardMarkup(buttons)
+from telegram import Update
+from telegram.ext import (
+    Application, CommandHandler, ContextTypes, MessageHandler, filters
+)
 
-def bet_keyboard():
-    buttons = [
-        [InlineKeyboardButton("10.000 VND", callback_data="10000"),
-         InlineKeyboardButton("50.000 VND", callback_data="50000"),
-         InlineKeyboardButton("100.000 VND", callback_data="100000")],
-        [InlineKeyboardButton("Nhập khác", callback_data="custom")]
-    ]
-    return InlineKeyboardMarkup(buttons)
+# ========================== CẤU HÌNH ==========================
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # BẮT BUỘC: đặt biến môi trường
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # id telegram của owner (tùy chọn)
+DB_PATH = os.getenv("DB_PATH", "casino.db")
 
-# --- Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if user_id not in users:
-        users[user_id] = {"vnd":50000,"vip_level":1,"consecutive_loss":0,"history":[]}
-        save_data()
-    await update.message.reply_text("Chào mừng đến Mini Casino Ultimate!", reply_markup=menu_keyboard())
+# Game switches (có thể bật/tắt bằng /toggle)
+DEFAULT_SWITCHES = {
+    "taixiu": True,
+    "dice": True,
+    "roulette": True,
+}
 
-# Menu chính
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = str(query.from_user.id)
-    data = query.data
-    if data=="play_game":
-        await query.edit_message_text("Chọn game bạn muốn chơi:", reply_markup=game_keyboard())
-        return CHOOSING_GAME
-    elif data=="balance":
-        await query.edit_message_text(f"Số dư của bạn: {users[user_id]['vnd']:,} VND", reply_markup=menu_keyboard())
-    elif data=="history":
-        history = users[user_id].get("history", [])
-        text = "\n".join([f"{h['game']} - {h['choice']} - {h['bet']:,} VND - {h['outcome']}" for h in history]) or "Chưa có lịch sử nào."
-        await query.edit_message_text(f"Lịch sử:\n{text}", reply_markup=menu_keyboard())
-    elif data=="top":
-        top_users = sorted(users.items(), key=lambda x: x[1]["vnd"], reverse=True)[:5]
-        text="\n".join([f"{u[0]}: {u[1]['vnd']:,} VND" for u in top_users])
-        await query.edit_message_text(f"Top 5:\n{text}", reply_markup=menu_keyboard())
-    elif data=="daily":
-        users[user_id]["vnd"] += 10000
-        save_data()
-        await query.edit_message_text(f"Bạn nhận được 10.000 VND từ Daily!\nSố dư: {users[user_id]['vnd']:,} VND", reply_markup=menu_keyboard())
-    return CHOOSING_GAME
+INITIAL_BALANCE = 1_000
+DAILY_REWARD = 200
+DAILY_COOLDOWN_HOURS = 24
+MAX_BET = 100_000
+MIN_BET = 10
 
-# Chọn game
-async def game_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = str(query.from_user.id)
-    game = query.data
-    users[user_id]["current_game"] = game
+# ========================== UTILITIES ==========================
+try:
+    from secrets import randbelow
+    _rand = randbelow
+except Exception:
+    import random
+    _sysrand = random.SystemRandom()
+    _rand = lambda n: _sysrand.randrange(n)
 
-    if game=="taixiu":
-        text="Chọn Tai hoặc Xiu:"
-    elif game=="dauxucxac":
-        text="Chọn số bạn muốn cược (1-6):"
-    elif game=="baucua":
-        text="Chọn 3 con bạn muốn cược (ví dụ: ca, bo, ho, tom, ga, cuu) cách nhau bằng dấu phẩy:"
-    elif game=="roulette":
-        text="Chọn màu: Do hoặc Den:"
-    elif game=="rutbai":
-        text="Chọn Cao hoặc Thấp:"
 
-    await query.edit_message_text(text)
-    return CHOOSING_OPTION
+def now_ts() -> str:
+    return datetime.utcnow().isoformat()
 
-# Nhập lựa chọn
-async def option_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    users[user_id]["choice"] = update.message.text
-    await update.message.reply_text("Chọn số VND muốn cược:", reply_markup=bet_keyboard())
-    return ENTER_BET
 
-# Chọn tiền
-async def choose_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = str(query.from_user.id)
-    if query.data=="custom":
-        await query.edit_message_text("Nhập số tiền VND muốn cược:")
-        return ENTER_BET
-    else:
-        users[user_id]["bet"] = int(query.data)
-        await play_game(update, context)
-        return CHOOSING_GAME
+def with_db(func):
+    """Decorator tiện mở/đóng kết nối SQLite."""
+    def wrapper(*args, **kwargs):
+        con = sqlite3.connect(DB_PATH)
+        con.execute("PRAGMA journal_mode=WAL;")
+        con.execute("PRAGMA foreign_keys=ON;")
+        try:
+            res = func(con, *args, **kwargs)
+            con.commit()
+            return res
+        finally:
+            con.close()
+    return wrapper
 
-# Nhập tiền thủ công
-async def enter_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    try:
-        bet = int(update.message.text)
-    except:
-        await update.message.reply_text("Vui lòng nhập số VND hợp lệ.")
-        return ENTER_BET
-    if bet>users[user_id]["vnd"]:
-        await update.message.reply_text("Bạn không có đủ VND để cược.")
-        return ENTER_BET
-    users[user_id]["bet"] = bet
-    await play_game(update, context)
-    return CHOOSING_GAME
 
-# --- Chơi game + animation ---
-async def play_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if hasattr(update, "callback_query"):
-        msg_obj = update.callback_query
-        await msg_obj.answer()
-    else:
-        msg_obj = update.message
-    user_id = str(update.effective_user.id)
-    choice = users[user_id]["choice"]
-    bet = users[user_id]["bet"]
-    game = users[user_id]["current_game"]
-
-    msg = await msg_obj.edit_message_text(f"🎲 Đang chơi {game}...") if hasattr(msg_obj, "edit_message_text") else await msg_obj.reply_text(f"🎲 Đang chơi {game}...")
-
-    emoji_map=["","⚀","⚁","⚂","⚃","⚄","⚅"]
-    baucua_map = {"ca":"🐟","bo":"🐂","ho":"🐅","tom":"🦐","ga":"🐓","cuu":"🐑"}
-    roulette_map = ["🟥","🟦"]
-    cards = ["🂡","🂢","🂣","🂤","🂥","🂦","🂧","🂨","🂩","🂪","🂫","🂭","🂮"]
-
-    # Xử lý từng game với animation
-    if game=="dauxucxac":
-        rolls=3
-        for _ in range(7):
-            display=" ".join([emoji_map[random.randint(1,6)] for _ in range(rolls)])
-            await msg.edit_text(f"🎲 Đua Xúc Xắc...\n{display}")
-            await asyncio.sleep(0.25)
-        dice=[random.randint(1,6) for _ in range(rolls)]
-        dice_display=" ".join([emoji_map[d] for d in dice])
-        outcome_text=f"{dice_display} = {sum(dice)}"
-        win=int(choice) in dice
-
-    elif game=="taixiu":
-        rolls=[random.randint(1,6) for _ in range(3)]
-        for _ in range(5):
-            display=" ".join([emoji_map[random.randint(1,6)] for _ in range(3)])
-            await msg.edit_text(f"🎲 Tài Xỉu...\n{display}")
-            await asyncio.sleep(0.3)
-        display=" ".join([emoji_map[r] for r in rolls])
-        total=sum(rolls)
-        outcome_text=f"{display} = {total}"
-        win=(choice.lower()=="tai" and total>10) or (choice.lower()=="xiu" and total<=10)
-
-    elif game=="baucua":
-        rolls=[random.choice(list(baucua_map.keys())) for _ in range(3)]
-        for _ in range(5):
-            display=" ".join([baucua_map[random.choice(list(baucua_map.keys()))] for _ in range(3)])
-            await msg.edit_text(f"🎲 Bầu Cua...\n{display}")
-            await asyncio.sleep(0.3)
-        display=" ".join([baucua_map[r] for r in rolls])
-        outcome_text=f"{display}"
-        choices = [c.strip() for c in choice.lower().split(",")]
-        win = any(r in choices for r in rolls)
-
-    elif game=="roulette":
-        for _ in range(7):
-            display=" ".join([random.choice(roulette_map) for _ in range(8)])
-            await msg.edit_text(f"🎡 Roulette quay...\n{display}")
-            await asyncio.sleep(0.25)
-        color=random.choice(["Do","Den"])
-        outcome_text=f"Màu dừng: {color}"
-        win=(choice.lower()==color.lower())
-
-    elif game=="rutbai":
-        card_value=random.randint(1,13)
-        for _ in range(5):
-            display=random.choice(cards)
-            await msg.edit_text(f"🃏 Rút Bài...\n{display}")
-            await asyncio.sleep(0.3)
-        outcome_text=f"Giá trị bài: {card_value}"
-        win=(card_value>=7 and choice.lower()=="cao") or (card_value<7 and choice.lower()=="thap")
-
-    # Cập nhật VND
-    if win:
-        users[user_id]["vnd"] += bet
-        outcome="Thắng"
-    else:
-        users[user_id]["vnd"] -= bet
-        outcome="Thua"
-
-    add_history(user_id, game, choice, bet, outcome)
-    save_data()
-    await msg.edit_text(f"Kết quả: {outcome_text}\nBạn {outcome}! Số dư: {users[user_id]['vnd']:,} VND", reply_markup=menu_keyboard())
-
-# --- Application ---
-if __name__=="__main__":
-    load_data()
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    conv = ConversationHandler(
-        entry_points=[CommandHandler(["start","cobac"], start)],
-        states={
-            CHOOSING_GAME:[CallbackQueryHandler(game_selection, pattern="^taixiu$|^dauxucxac$|^baucua$|^roulette$|^rutbai$"),
-                           CallbackQueryHandler(menu_handler, pattern="^balance$|^history$|^top$|^daily$|^play_game$")],
-            CHOOSING_OPTION:[MessageHandler(filters.TEXT & ~filters.COMMAND, option_selected)],
-            ENTER_BET:[CallbackQueryHandler(choose_bet, pattern="^\d+$|^custom$"),
-                       MessageHandler(filters.TEXT & ~filters.COMMAND, enter_bet)]
-        },
-        fallbacks=[CommandHandler("start", start)],
-        per_message=False
+@with_db
+def init_db(con: sqlite3.Connection):
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tg_id INTEGER UNIQUE NOT NULL,
+            username TEXT,
+            balance INTEGER NOT NULL DEFAULT 0,
+            last_daily TEXT
+        );
+        """
     )
-    app.add_handler(conv)
-    print("Bot đang chạy...")
-    app.run_polling()
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            game TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            choice TEXT NOT NULL,
+            result TEXT NOT NULL,
+            payout INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS switches (
+            key TEXT PRIMARY KEY,
+            value INTEGER NOT NULL
+        );
+        """
+    )
+    # seed switches
+    for k, v in DEFAULT_SWITCHES.items():
+        con.execute(
+            "INSERT OR IGNORE INTO switches(key, value) VALUES (?, ?)", (k, 1 if v else 0)
+        )
+
+
+@with_db
+def get_or_create_user(con: sqlite3.Connection, tg_id: int, username: Optional[str]) -> Tuple[int, int]:
+    cur = con.execute("SELECT id, balance FROM users WHERE tg_id=?", (tg_id,))
+    row = cur.fetchone()
+    if row:
+        return row[0], row[1]
+    con.execute(
+        "INSERT INTO users(tg_id, username, balance) VALUES (?, ?, ?)",
+        (tg_id, username, INITIAL_BALANCE),
+    )
+    uid = con.execute("SELECT id FROM users WHERE tg_id=?", (tg_id,)).fetchone()[0]
+    return uid, INITIAL_BALANCE
+
+
+@with_db
+def get_user(con: sqlite3.Connection, tg_id: int) -> Optional[Tuple[int, str, int, Optional[str]]]:
+    cur = con.execute("SELECT id, username, balance, last_daily FROM users WHERE tg_id=?", (tg_id,))
+    return cur.fetchone()
+
+
+@with_db
+def update_balance(con: sqlite3.Connection, user_id: int, new_balance: int):
+    con.execute("UPDATE users SET balance=? WHERE id=?", (new_balance, user_id))
+
+
+@with_db
+def record_bet(con: sqlite3.Connection, user_id: int, game: str, amount: int, choice: str, result: str, payout: int):
+    con.execute(
+        "INSERT INTO bets(user_id, game, amount, choice, result, payout, created_at) VALUES (?,?,?,?,?,?,?)",
+        (user_id, game, amount, choice, result, payout, now_ts()),
+    )
+
+
+@with_db
+def set_last_daily(con: sqlite3.Connection, user_id: int, ts: str):
+    con.execute("UPDATE users SET last_daily=? WHERE id=?", (ts, user_id))
+
+
+@with_db
+def leaderboard(con: sqlite3.Connection, limit: int = 10):
+    cur = con.execute("SELECT username, balance FROM users ORDER BY balance DESC LIMIT ?", (limit,))
+    return cur.fetchall()
+
+
+@with_db
+def set_switch(con: sqlite3.Connection, key: str, value: bool):
+    con.execute("INSERT INTO switches(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, 1 if value else 0))
+
+
+@with_db
+def get_switch(con: sqlite3.Connection, key: str) -> bool:
+    cur = con.execute("SELECT value FROM switches WHERE key=?", (key,))
+    row = cur.fetchone()
+    if not row:
+        return DEFAULT_SWITCHES.get(key, True)
+    return bool(row[0])
+
+
+# ========================== HELPERS ==========================
+
+def parse_bet(args: list[str]) -> Tuple[Optional[int], Optional[str]]:
+    if len(args) < 2:
+        return None, None
+    try:
+        amt = int(args[0])
+    except ValueError:
+        return None, None
+    return amt, args[1].lower()
+
+
+def ensure_registered(user: Optional[Tuple[int, str, int, Optional[str]]]) -> bool:
+    return user is not None
+
+
+def clamp_bet(amount: int) -> Optional[str]:
+    if amount < MIN_BET:
+        return f"Mức cược tối thiểu là {MIN_BET}."
+    if amount > MAX_BET:
+        return f"Mức cược tối đa là {MAX_BET}."
+    return None
+
+
+# ========================== COMMANDS ==========================
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    init_db()  # đảm bảo DB sẵn sàng
+    uid, bal = get_or_create_user(user.id, user.username or user.full_name)
+    await update.message.reply_text(
+        f"Chào {user.first_name}! Bạn đã có ví coin ảo với số dư: {bal}💰\n"
+        f"/help để xem lệnh. Chơi vui, KHÔNG tiền thật."
+    )
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "📜 Lệnh cơ bản:\n"
+        "/start – khởi động & tạo ví\n"
+        "/balance hoặc /bal – xem số dư\n"
+        f"/daily – nhận {DAILY_REWARD} coin mỗi {DAILY_COOLDOWN_HOURS}h\n"
+        "/leaderboard – top coin\n\n"
+        "🎲 Cược game:\n"
+        "/bet_taixiu <tiền> <tai|xiu>\n"
+        "/bet_dice <tiền> <1-6>  (đúng ăn x5)\n"
+        "/bet_roulette <tiền> <red|black|even|odd|0-36>\n\n"
+        "⚙️ Admin: /give @user <tiền>, /setbal @user <tiền>, /toggle <game> on|off\n"
+        "🔒 Lưu ý: coin ảo, không đổi ra tiền thật."
+    )
+    await update.message.reply_text(msg)
+
+
+async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "✅ Luật chơi công bằng, random minh bạch.\n"
+        "❌ Không dùng tiền thật, không khuyến khích đánh bạc.\n"
+        "🧠 Vui là chính — nhớ kiểm soát thời gian!"
+    )
+
+
+async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(update.effective_user.id)
+    if not ensure_registered(user):
+        await update.message.reply_text("Bạn chưa có ví. Gõ /start để tạo.")
+        return
+    _, username, balance, _ = user
+    await update.message.reply_text(f"{username}: {balance} coin 💰")
+
+
+async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = get_user(update.effective_user.id)
+    if not ensure_registered(u):
+        await update.message.reply_text("Bạn chưa có ví. Gõ /start để tạo.")
+        return
+    uid, _, balance, last_daily = u
+    now = datetime.utcnow()
+    if last_daily:
+        last = datetime.fromisoformat(last_daily)
+        if now - last < timedelta(hours=DAILY_COOLDOWN_HOURS):
+            remain = timedelta(hours=DAILY_COOLDOWN_HOURS) - (now - last)
+            hrs = int(remain.total_seconds() // 3600)
+            mins = int((remain.total_seconds() % 3600) // 60)
+            await update.message.reply_text(f"Chưa đủ cooldown. Thử lại sau {hrs}h{mins:02d}.")
+            return
+    # reward
+    new_bal = balance + DAILY_REWARD
+    update_balance(uid, new_bal)
+    set_last_daily(uid, now.isoformat())
+    await update.message.reply_text(f"Nhận +{DAILY_REWARD} coin! Số dư: {new_bal} 💰")
+
+
+# -------------- GAME: TÀI XỈU --------------
+
+def roll_3dice() -> Tuple[int, Tuple[int, int, int]]:
+    d1 = _rand(6) + 1
+    d2 = _rand(6) + 1
+    d3 = _rand(6) + 1
+    s = d1 + d2 + d3
+    return s, (d1, d2, d3)
+
+
+async def cmd_bet_taixiu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not get_switch("taixiu"):
+        await update.message.reply_text("Game Tài Xỉu đang tắt.")
+        return
+    u = get_user(update.effective_user.id)
+    if not ensure_registered(u):
+        await update.message.reply_text("Bạn chưa có ví. Gõ /start để tạo.")
+        return
+    uid, _, balance, _ = u
+
+    amt, choice = parse_bet(context.args)
+    if amt is None:
+        await update.message.reply_text("Cú pháp: /bet_taixiu <tiền> <tai|xiu>")
+        return
+    msg = clamp_bet(amt)
+    if msg:
+        await update.message.reply_text(msg)
+        return
+    if amt > balance:
+        await update.message.reply_text("Không đủ coin.")
+        return
+    if choice not in {"tai", "xiu"}:
+        await update.message.reply_text("Chọn 'tai' hoặc 'xiu'.")
+        return
+
+    total, dice = roll_3dice()
+    outcome = "tai" if total >= 11 else "xiu"
+    win = (choice == outcome)
+    payout = amt if win else -amt
+    new_bal = balance + payout
+    update_balance(uid, new_bal)
+    record_bet(uid, "taixiu", amt, choice, f"{dice}={total}", payout)
+
+    text = (
+        f"🎲 Kết quả: {dice} = {total} → {outcome.upper()}\n"
+        f"Bạn {'THẮNG' if win else 'THUA'} {'+' if win else ''}{payout} coin.\n"
+        f"Số dư mới: {new_bal} 💰"
+    )
+    await update.message.reply_text(text)
+
+
+# -------------- GAME: ĐOÁN XÚC XẮC (1-6) --------------
+async def cmd_bet_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not get_switch("dice"):
+        await update.message.reply_text("Game Dice đang tắt.")
+        return
+    u = get_user(update.effective_user.id)
+    if not ensure_registered(u):
+        await update.message.reply_text("Bạn chưa có ví. Gõ /start để tạo.")
+        return
+    uid, _, balance, _ = u
+
+    amt, face = parse_bet(context.args)
+    if amt is None:
+        await update.message.reply_text("Cú pháp: /bet_dice <tiền> <1-6>")
+        return
+    msg = clamp_bet(amt)
+    if msg:
+        await update.message.reply_text(msg)
+        return
+    if amt > balance:
+        await update.message.reply_text("Không đủ coin.")
+        return
+    if face not in {"1","2","3","4","5","6"}:
+        await update.message.reply_text("Bạn phải chọn số từ 1 đến 6.")
+        return
+
+    roll = _rand(6) + 1
+    win = (int(face) == roll)
+    payout = amt * 5 if win else -amt  # fair-ish (house edge ~16.67% w/ single die paying 5x)
+    new_bal = balance + payout
+    update_balance(uid, new_bal)
+    record_bet(uid, "dice", amt, face, str(roll), payout)
+
+    await update.message.reply_text(
+        f"🎯 Xúc xắc ra: {roll}\nBạn {'THẮNG' if win else 'THUA'} {'+' if win else ''}{payout} coin.\nSố dư mới: {new_bal} 💰"
+    )
+
+
+# -------------- GAME: ROULETTE ĐƠN GIẢN --------------
+_ROULETTE_REDS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+_ROULETTE_BLACKS = set(range(1,37)) - _ROULETTE_REDS
+
+
+def spin_roulette() -> int:
+    # Single-zero roulette: 0..36
+    return _rand(37)
+
+
+async def cmd_bet_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not get_switch("roulette"):
+        await update.message.reply_text("Roulette đang tắt.")
+        return
+    u = get_user(update.effective_user.id)
+    if not ensure_registered(u):
+        await update.message.reply_text("Bạn chưa có ví. Gõ /start để tạo.")
+        return
+    uid, _, balance, _ = u
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Cú pháp: /bet_roulette <tiền> <red|black|even|odd|0-36>")
+        return
+    try:
+        amt = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Tiền cược phải là số nguyên.")
+        return
+    choice = context.args[1].lower()
+
+    msg = clamp_bet(amt)
+    if msg:
+        await update.message.reply_text(msg)
+        return
+    if amt > balance:
+        await update.message.reply_text("Không đủ coin.")
+        return
+
+    result = spin_roulette()
+    win = False
+    multiplier = 0
+
+    if choice in {"red", "đen", "black"}:  # hỗ trợ en/vi
+        is_red = result in _ROULETTE_REDS
+        is_black = result in _ROULETTE_BLACKS
+        if result == 0:
+            win = False
+        elif choice in {"red"} and is_red:
+            win = True
+        elif choice in {"black", "đen"} and is_black:
+            win = True
+        multiplier = 1  # 1:1
+    elif choice in {"even", "chẵn"}:
+        win = (result != 0 and result % 2 == 0)
+        multiplier = 1
+    elif choice in {"odd", "lẻ"}:
+        win = (result % 2 == 1)
+        multiplier = 1
+    else:
+        # chọn số cụ thể
+        if re.fullmatch(r"\d{1,2}", choice):
+            num = int(choice)
+            if 0 <= num <= 36:
+                win = (result == num)
+                multiplier = 35  # 35:1
+            else:
+                await update.message.reply_text("Số phải từ 0 đến 36.")
+                return
+        else:
+            await update.message.reply_text("Lựa chọn không hợp lệ.")
+            return
+
+    payout = (amt * multiplier) if win else -amt
+    new_bal = balance + payout
+    update_balance(uid, new_bal)
+    record_bet(uid, "roulette", amt, choice, str(result), payout)
+
+    await update.message.reply_text(
+        f"🎡 Roulette ra: {result}\nBạn {'THẮNG' if win else 'THUA'} {'+' if win else ''}{payout} coin.\nSố dư mới: {new_bal} 💰"
+    )
+
+
+# -------------- LEADERBOARD --------------
+async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    top = leaderboard(10)
+    if not top:
+        await update.message.reply_text("Chưa có ai trong bảng xếp hạng.")
+        return
+    text = ["🏆 TOP 10 GIÀU NHẤT:"]
+    for i, (username, bal) in enumerate(top, start=1):
+        text.append(f"{i}. {username or 'Người chơi'} – {bal}💰")
+    await update.message.reply_text("\n".join(text))
+
+
+# -------------- ADMIN --------------
+async def _require_owner(update: Update) -> bool:
+    if OWNER_ID and update.effective_user and update.effective_user.id == OWNER_ID:
+        return True
+    await update.effective_message.reply_text("Bạn không có quyền.")
+    return False
+
+
+@with_db
+def find_user_by_mention(con: sqlite3.Connection, mention: str) -> Optional[Tuple[int, int, str]]:
+    # Chấp nhận @username hoặc ID
+    if mention.startswith("@"):  # by username
+        cur = con.execute("SELECT id, tg_id, username FROM users WHERE lower(username)=lower(?)", (mention[1:],))
+        return cur.fetchone()
+    else:
+        try:
+            tid = int(mention)
+        except ValueError:
+            return None
+        cur = con.execute("SELECT id, tg_id, username FROM users WHERE tg_id=?", (tid,))
+        return cur.fetchone()
+
+
+async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _require_owner(update):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Cú pháp: /give @user <tiền>")
+        return
+    target = find_user_by_mention(context.args[0])
+    if not target:
+        await update.message.reply_text("Không tìm thấy user.")
+        return
+    try:
+        amt = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("Tiền phải là số.")
+        return
+    # get current bal
+    u = get_user(target[1])
+    new_bal = u[2] + amt
+    update_balance(u[0], new_bal)
+    await update.message.reply_text(f"Đã cộng {amt} coin cho {u[1]}. Số dư: {new_bal}")
+
+
+async def cmd_setbal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _require_owner(update):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Cú pháp: /setbal @user <tiền>")
+        return
+    target = find_user_by_mention(context.args[0])
+    if not target:
+        await update.message.reply_text("Không tìm thấy user.")
+        return
+    try:
+        amt = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("Tiền phải là số.")
+        return
+    update_balance(target[0], amt)
+    await update.message.reply_text(f"Đã set số dư {amt} cho {target[2]}.")
+
+
+async def cmd_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _require_owner(update):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Cú pháp: /toggle <taixiu|dice|roulette> <on|off>")
+        return
+    game, state = context.args[0].lower(), context.args[1].lower()
+    if game not in DEFAULT_SWITCHES:
+        await update.message.reply_text("Game không hợp lệ.")
+        return
+    val = True if state in {"on", "1", "true"} else False
+    set_switch(game, val)
+    await update.message.reply_text(f"Đã {'bật' if val else 'tắt'} {game}.")
+
+
+# -------------- MISC --------------
+async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Không hiểu lệnh. Gõ /help nhé.")
+
+
+# ========================== MAIN ==========================
+async def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("Thiếu BOT_TOKEN. Đặt biến môi trường BOT_TOKEN rồi chạy lại.")
+
+    init_db()
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler(["help", "menu"], cmd_help))
+    app.add_handler(CommandHandler("rules", cmd_rules))
+    app.add_handler(CommandHandler(["balance", "bal"], cmd_balance))
+    app.add_handler(CommandHandler("daily", cmd_daily))
+
+    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
+
+    app.add_handler(CommandHandler("bet_taixiu", cmd_bet_taixiu))
+    app.add_handler(CommandHandler("bet_dice", cmd_bet_dice))
+    app.add_handler(CommandHandler("bet_roulette", cmd_bet_roulette))
+
+    app.add_handler(CommandHandler("give", cmd_give))
+    app.add_handler(CommandHandler("setbal", cmd_setbal))
+    app.add_handler(CommandHandler("toggle", cmd_toggle))
+
+    app.add_handler(MessageHandler(filters.COMMAND, unknown))
+
+    print("Bot đang chạy… nhấn Ctrl+C để dừng.")
+    await app.run_polling(close_loop=False)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Tạm biệt!")
