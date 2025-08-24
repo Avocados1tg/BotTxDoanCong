@@ -31,10 +31,10 @@ DEFAULT_SWITCHES = {
     "quest": True,
 }
 
-INITIAL_BALANCE = 1_000
-DAILY_REWARD = 300
-DAILY_COOLDOWN_HOURS = 24
-MAX_BET = 100_000
+INITIAL_BALANCE = 10_000
+DAILY_REWARD = 1000
+DAILY_COOLDOWN_HOURS = 1
+MAX_BET = 100_000_000_000
 MIN_BET = 10
 QUEST_MIN = 100
 QUEST_MAX = 500
@@ -137,10 +137,10 @@ def init_db(con: sqlite3.Connection):
 
     # seed shop items (insert only if name not exists)
     seed_items = [
-        ("🎩 Top Hat", 1000),
-        ("👑 Crown", 5000),
-        ("🔥 Fire Badge", 2000),
-        ("🍀 Lucky Charm", 1500),
+        ("🎩 Thuốc lăc", 1000),
+        ("👑 Mũ lồn", 3000),
+        ("🔥 Free Fire Đó", 20000),
+        ("🍀 May Cái Lồn", 1500),
     ]
     for name, price in seed_items:
         exists = con.execute("SELECT 1 FROM shop WHERE name=?", (name,)).fetchone()
@@ -260,13 +260,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     init_db()
     uid, bal = get_or_create_user(user.id, user.username or (user.full_name or "user"))
     await update.message.reply_text(
-        f"Chào {user.first_name}! Ví coin ảo của bạn: {bal}💰\nGõ /help để xem lệnh. Chơi vui, KHÔNG tiền thật.",
+        f"Chào cái dit con mẹ mày nè thằng {user.first_name}! Số tiền của mày nè con đỹ lồn!: {bal}💰\nGõ /help để xem lệnh nha thằng mặt lồn. Chơi vui, thua coi quạo nha thằng bot!!!",
         reply_markup=main_menu_keyboard()
     )
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Menu nhanh:", reply_markup=main_menu_keyboard())
+    await update.message.reply_text("Menu như con cặc dùng cũng như không à:", reply_markup=main_menu_keyboard())
 
 
 async def on_menu_press(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -280,13 +280,13 @@ async def on_menu_press(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "m:daily":
         return await cmd_daily(update, context)
     if data == "m:tx":
-        await q.message.reply_text("Cú pháp: /bet_taixiu <tiền> <tai|xiu>")
+        await q.message.reply_text("Cú pháp: /tx <tiền> <tai|xiu>")
         return
     if data == "m:dice":
-        await q.message.reply_text("Cú pháp: /bet_dice <tiền> <1-6>")
+        await q.message.reply_text("Cú pháp: /dice <tiền> <1-6>")
         return
     if data == "m:roul":
-        await q.message.reply_text("Cú pháp: /bet_roulette <tiền> <red|black|even|odd|0-36>")
+        await q.message.reply_text("Cú pháp: /roul <tiền> <do|den|chan|le|0-36>")
         return
     if data == "m:shop":
         return await cmd_shop(update, context)
@@ -301,18 +301,18 @@ async def on_menu_press(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "📜 Lệnh cơ bản:\n"
-        "/srart – khởi tạo ví\n"
+        "/movi – khởi tạo ví\n"
         "/menu – menu nút\n"
-        "/whoami – xem user_id\n"
+        "/myid – xem user_id\n"
         "/balance (/bal) – xem số dư\n"
         f"/daily – nhận {DAILY_REWARD} coin mỗi {DAILY_COOLDOWN_HOURS}h\n"
         "/leaderboard – top coin\n"
         "/weekly – top tuần (tham khảo)\n\n"
         "🎲 Cược game:\n"
         "/coin <tiền> <ngua|sap>\n"
-        "/bet_taixiu <tiền> <tai|xiu>\n"
-        "/bet_dice <tiền> <1-6>\n"
-        "/bet_roulette <tiền> <red|black|even|odd|0-36>\n\n"
+        "/tx <tiền> <tai|xiu>\n"
+        "/dice <tiền> <1-6>\n"
+        "/roul <tiền> <do|den|chan|le|0-36>\n\n"
         "🛒 Shop:\n"
         "/shop – xem hàng\n"
         "/buy <id> – mua\n"
@@ -324,7 +324,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/quest – mô tả nhiệm vụ ngày\n"
         "/quest_claim – nhận thưởng ngày ngẫu nhiên\n\n"
         "⚙️ Admin: /give @user <tiền>, /setbal @user <tiền>, /toggle <game> on|off\n"
-        "🔒 Coin ảo – không đổi ra tiền thật."
     )
     await update.message.reply_text(msg)
 
@@ -333,7 +332,7 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Random minh bạch.\n❌ Không dùng tiền thật.\n🧠 Vui là chính — chơi có kiểm soát.")
 
 
-async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     await update.message.reply_text(f"user_id của bạn: {u.id}")
 
@@ -444,9 +443,9 @@ async def _troll_feedback(update: Update, uid: int, win: bool, bet_amt: int = 0,
     if not get_switch("troll"):
         return
     losses = get_recent_losses(uid, 3)
-    if losses >= 3:
+    if losses >= 2:
         await update.message.reply_text("🤡 ÓC lồn chơi ngu dữ mày deo biết đổi trò khác à đồ ngu???")
-    if win and payout >= bet_amt * 2 and bet_amt > 0:
+    if win and payout >= 2 bet_amt * 2 and bet_amt > 0:
         await update.message.reply_text("🤑 Ăn may kìa trời má nó rùa sao mà rùa!!!")
 
 
@@ -460,19 +459,19 @@ async def _apply_bet(update: Update, game: str, amt: int, choice: str, win: bool
     return payout, new_bal
 
 
-async def cmd_bet_taixiu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not get_switch("taixiu"):
         await update.message.reply_text("Game Tài Xỉu đang tắt.")
         return
     u = get_user(update.effective_user.id)
     if not u:
-        await update.message.reply_text("Bạn chưa có ví. Gõ /start để tạo.")
+        await update.message.reply_text("Bạn chưa có ví. Gõ /movi để tạo.")
         return
     uid, _, balance, *_ = u
 
     amt, choice = parse_bet(context.args)
     if amt is None:
-        await update.message.reply_text("Cú pháp: /bet_taixiu <tiền> <tai|xiu>")
+        await update.message.reply_text("Cú pháp: /tx <tiền> <tai|xiu>")
         return
     msg = clamp_bet(amt)
     if msg:
@@ -482,7 +481,7 @@ async def cmd_bet_taixiu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Không đủ coin.")
         return
     if choice not in {"tai", "xiu"}:
-        await update.message.reply_text("Chọn 'tai' hoặc 'xiu'.")
+        await update.message.reply_text("dcm ngu à deo biết chọn 'tai' hoặc 'xiu' à.")
         return
 
     total, dice = roll_3dice()
@@ -497,19 +496,19 @@ async def cmd_bet_taixiu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def cmd_bet_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not get_switch("dice"):
         await update.message.reply_text("Game Dice đang tắt.")
         return
     u = get_user(update.effective_user.id)
     if not u:
-        await update.message.reply_text("Bạn chưa có ví. Gõ /start để tạo.")
+        await update.message.reply_text("Bạn chưa có ví. Gõ /movi để tạo.")
         return
     uid, _, balance, *_ = u
 
     amt, face = parse_bet(context.args)
     if amt is None:
-        await update.message.reply_text("Cú pháp: /bet_dice <tiền> <1-6>")
+        await update.message.reply_text("Cú pháp: /dice <tiền> <1-6>")
         return
     msg = clamp_bet(amt)
     if msg:
@@ -536,7 +535,7 @@ async def cmd_bet_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def cmd_bet_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_roul(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not get_switch("roulette"):
         await update.message.reply_text("Roulette đang tắt.")
         return
@@ -547,7 +546,7 @@ async def cmd_bet_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid, _, balance, *_ = u
 
     if len(context.args) < 2:
-        await update.message.reply_text("Cú pháp: /bet_roulette <tiền> <red|black|even|odd|0-36>")
+        await update.message.reply_text("Cú pháp: /roul <tiền> <do|den|chan|le|0-36>")
         return
     try:
         amt = int(context.args[0])
@@ -568,18 +567,18 @@ async def cmd_bet_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
     win = False
     multiplier = 0
 
-    if choice in {"red", "đen", "black"}:
+    if choice in {"do", "đen", "den"}:
         is_red = result in _ROULETTE_REDS
         is_black = result in _ROULETTE_BLACKS
-        if choice == "red":
+        if choice == "do":
             win = is_red; multiplier = 1
-        elif choice in {"black", "đen"}:
+        elif choice in {"den", "đen"}:
             win = is_black; multiplier = 1
-    elif choice in {"even", "odd"}:
+    elif choice in {"chan", "le"}:
         if result != 0:
-            if choice == "even" and result % 2 == 0:
+            if choice == "chan" and result % 2 == 0:
                 win, multiplier = True, 1
-            if choice == "odd" and result % 2 == 1:
+            if choice == "le" and result % 2 == 1:
                 win, multiplier = True, 1
     else:
         try:
@@ -636,7 +635,7 @@ async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     u = get_user(update.effective_user.id)
     if not u:
-        await update.message.reply_text("Bạn chưa có ví. /start để tạo.")
+        await update.message.reply_text("Bạn chưa có ví. /movi để tạo.")
         return
     uid, _, balance, *_ = u
 
@@ -697,13 +696,13 @@ async def _transfer_generic(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     src_u = get_user(update.effective_user.id)
     if not src_u:
-        await update.message.reply_text("Bạn chưa có ví. /start để tạo.")
+        await update.message.reply_text("Bạn chưa có ví. /movi để tạo.")
         return
     src_id, _, src_bal, *_ = src_u
 
     tgt = find_user_by_username_or_id(target)
     if not tgt:
-        await update.message.reply_text("Không tìm thấy người nhận. Họ phải /start trước.")
+        await update.message.reply_text("Không tìm thấy người nhận. Họ phải /movi trước.")
         return
     tgt_id, tgt_tid, tgt_name = tgt
     if tgt_tid == update.effective_user.id:
@@ -884,22 +883,22 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     # Core
-    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("movi", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(CallbackQueryHandler(on_menu_press))
 
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("rules", cmd_rules))
-    app.add_handler(CommandHandler(["whoami", "id"], cmd_whoami))
+    app.add_handler(CommandHandler(["myid", "id"], cmd_myid))
     app.add_handler(CommandHandler(["bal", "balance"], cmd_balance))
     app.add_handler(CommandHandler("daily", cmd_daily))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("weekly", cmd_weekly))
 
     # Games
-    app.add_handler(CommandHandler("bet_taixiu", cmd_bet_taixiu))
-    app.add_handler(CommandHandler("bet_dice", cmd_bet_dice))
-    app.add_handler(CommandHandler("bet_roulette", cmd_bet_roulette))
+    app.add_handler(CommandHandler("tx", cmd_tx))
+    app.add_handler(CommandHandler("dice", cmd_dice))
+    app.add_handler(CommandHandler("roul", cmd_roul))
     app.add_handler(CommandHandler("coin", cmd_coin))
 
 
