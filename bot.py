@@ -935,4 +935,15 @@ def main():
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("rules", cmd_rules))
     app.add_handler(CommandHandler(["whoami","id"], cmd_whoami))
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("shop", cmd_shop))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
 
