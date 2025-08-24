@@ -934,4 +934,5 @@ def main():
     # help/rules
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("rules", cmd_rules))
-    app.add_handler(CommandHandler(["whoami","id"],
+    app.add_handler(CommandHandler(["whoami","id"], cmd_whoami))
+
