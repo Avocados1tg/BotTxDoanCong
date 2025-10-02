@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Thay bằng token thật từ BotFather
-TOKEN = 'YOUR_TOKEN_HERE'
+TOKEN = '8286493053:AAEmXJ7XJ8d73TeG4GZo-jrPgSJntyacjtQ'
 
 # Lưu dữ liệu user (tạm, reset khi restart)
 user_scores = defaultdict(lambda: {'wins': 0, 'losses': 0, 'balance': 100})  # 100 điểm khởi đầu
