@@ -3,29 +3,26 @@ import random
 import os
 import sqlite3
 import asyncio
-from datetime import datetime, timedelta
-from collections import deque
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Voice
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# YT libs
 import yt_dlp
 
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 
 if not TOKEN:
-    print("Lỗi: Không tìm thấy TELEGRAM_BOT_TOKEN. Đặt vào Railway!")
+    print("Lỗi: Không tìm thấy TELEGRAM_BOT_TOKEN.")
     exit(1)
 
-# Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# DB for queue/playlist (per chat)
-DB_FILE = 'music_bot.db'
+# DB for queue & bonus
+DB_FILE = 'yt_music.db'
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('''CREATE TABLE IF NOT EXISTS queues (
-    chat_id INTEGER PRIMARY KEY,
+    chat_id INTEGER,
     song_title TEXT,
     song_url TEXT,
     added_by INTEGER,
@@ -64,12 +61,11 @@ def can_claim_bonus(user_id):
     return last_date < today
 
 def claim_bonus(user_id):
-    bonus_songs = random.choice(['Happy Pharrell Williams', 'Shape of You Ed Sheeran', 'Despacito Luis Fonsi'])  # Random free song
+    bonus_songs = random.choice(['Happy - Pharrell Williams', 'Shape of You - Ed Sheeran', 'Despacito - Luis Fonsi'])
     cursor.execute("INSERT OR REPLACE INTO users (user_id, daily_bonus_claimed) VALUES (?, ?)", (user_id, datetime.now().date().strftime('%Y-%m-%d')))
     conn.commit()
     return bonus_songs
 
-# YT search function
 async def search_yt_music(query, max_results=5):
     ydl_opts = {
         'quiet': True,
@@ -83,7 +79,7 @@ async def search_yt_music(query, max_results=5):
             for entry in results:
                 songs.append({
                     'title': entry['title'],
-                    'url': f"https://www.youtube.com{entry['id']}" if entry['id'] else entry['webpage_url'],
+                    'url': f"https://www.youtube.com/watch?v={entry['id']}",
                     'duration': entry.get('duration', 0)
                 })
             return songs
@@ -91,15 +87,14 @@ async def search_yt_music(query, max_results=5):
             logging.error(f"YT search error: {e}")
             return []
 
-# Download preview 30s audio
 async def download_preview(url, title):
     ydl_opts = {
         'format': 'bestaudio/best',
-        'outtmpl': '%(title)s.%(ext)s',
+        'outtmpl': 'temp.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
+            'preferredcodec': 'ogg',  # For voice message
+            'preferredquality': '64',
         }],
         'postprocessor_args': ['-ss', '0', '-t', '30'],  # 30s preview
         'quiet': True,
@@ -113,7 +108,6 @@ async def download_preview(url, title):
             logging.error(f"Download error: {e}")
             return None, None
 
-# Play next song async
 async def play_next_song(context, chat_id):
     queue = get_queue(chat_id)
     if not queue:
@@ -124,14 +118,12 @@ async def play_next_song(context, chat_id):
     if file_path:
         with open(file_path, 'rb') as audio:
             await context.bot.send_voice(chat_id=chat_id, voice=audio, caption=f'🎵 **Đang chơi: {song_title}** (preview 30s)')
-        os.remove(file_path)  # Clean
+        os.remove(file_path)
         mark_played(chat_id)
     else:
         await context.bot.send_message(chat_id=chat_id, text=f'❌ **Lỗi play {title}!** Thử bài khác.')
-    # Loop next
     asyncio.create_task(play_next_song(context, chat_id))
 
-# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
@@ -154,13 +146,12 @@ def get_main_keyboard():
         [InlineKeyboardButton("📋 Xem Queue", callback_data='music_queue')],
         [InlineKeyboardButton("⏭ Skip Bài", callback_data='music_skip')],
         [InlineKeyboardButton("🎁 Daily Bonus", callback_data='music_bonus')],
-        [InlineKeyboardButton("📤 Clear Queue", callback_data='music_clear')],
+        [InlineKeyboardButton("🗑️ Clear Queue", callback_data='music_clear')],
         [InlineKeyboardButton("ℹ️ Hướng dẫn", callback_data='music_help')],
-        [InlineKeyboardButton("🔙 Menu Trò Chơi", callback_data='back_games')]  # Link to game menu if integrated
+        [InlineKeyboardButton("🔙 Menu Trò Chơi", callback_data='back_games')]  # Nếu có game
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# Button handler for music
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -179,7 +170,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not queue:
             msg = '📋 **Queue trống!**\nThêm bài hát đi 🎵'
         else:
-            msg = '📋 **Queue hiện tại:**\n' + '\n'.join(f'• {title} ({duration}s)' for title, url in queue[:5]) + ('...\n(5+ bài)' if len(queue) > 5 else '')
+            msg = '📋 **Queue hiện tại:**\n' + '\n'.join(f'• {title}' for title, _ in queue[:5]) + ('...\n(5+ bài)' if len(queue) > 5 else '')
         keyboard = [[InlineKeyboardButton("🔙 Menu", callback_data='music_menu')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown', reply_markup=reply_markup)
@@ -215,7 +206,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • **Skip:** Bỏ bài hiện tại, play bài sau.
 • **Daily:** Bonus 1 bài random miễn phí/ngày.
 • **Clear:** Xóa queue.
-• Lưu ý: Preview 30s (free), full nghe trên YT app. Không download full để tuân thủ quy định.
+• Lưu ý: Preview 30s (free), full nghe trên YT app. Không download full.
 
 🔙 *Menu*
         """
@@ -229,8 +220,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text='🎵 **Menu Nhạc YT:**\nChọn để search, play, queue...', parse_mode='Markdown', reply_markup=keyboard)
         return
 
-    # Các phần game cũ (Tài Xỉu, Bầu Cua, etc.) giữ nguyên, thêm nút "Back to Music" nếu cần
-    # ... (code game từ trước, ~400 dòng)
+    if query.data.startswith('music_add_'):
+        parts = query.data.split('_', 3)
+        url = parts[2]
+        title = parts[3].replace("_", " ") if len(parts) > 3 else 'Unknown'
+        add_to_queue(chat_id, title, url, user_id)
+        await context.bot.send_message(chat_id=chat_id, text=f'🎵 **Added to queue: {title}**\nPlaying preview...', reply_markup=get_menu_keyboard())
+        asyncio.create_task(play_next_song(context, chat_id))
+        return
 
 # Command /music
 async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -265,18 +262,6 @@ async def handle_music_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg = '🎵 **Kết quả search YT:**\nChọn bài để add queue (preview 30s).'
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
     context.user_data.pop('waiting_search', None)
-
-# Add song from button
-if query.data.startswith('music_add_'):
-    parts = query.data.split('_', 3)
-    url = parts[2]
-    title = parts[3].replace("_", " ") if len(parts) > 3 else 'Unknown'
-    add_to_queue(chat_id, title, url, user_id)
-    await context.bot.send_message(chat_id=chat_id, text=f'🎵 **Added to queue: {title}**\nPlaying preview...', reply_markup=get_menu_keyboard())
-    asyncio.create_task(play_next_song(context, chat_id))
-    return
-
-# Các command khác (challenge, tip, stats, admin) giữ nguyên
 
 def get_menu_keyboard():
     keyboard = [[InlineKeyboardButton("🔙 Menu", callback_data='music_menu')]]
