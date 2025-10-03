@@ -17,7 +17,7 @@ if not TOKEN:
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# DB for queue & bonus
+# DB
 DB_FILE = 'yt_music.db'
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
@@ -72,6 +72,9 @@ def claim_bonus(user_id):
     return bonus_title, bonus_url
 
 async def search_yt_music(query, max_results=5):
+    # Thêm "nhạc Việt" nếu query tiếng Việt
+    if any(char in 'àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ' for char in query):
+        query += ' nhạc Việt'
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -117,7 +120,7 @@ async def download_preview(url, title):
 async def play_next_song(context, chat_id):
     title, url = get_queue(chat_id)
     if not title:
-        return  # Không queue thì dừng, không spam
+        return  # Không queue thì dừng
     file_path, song_title = await download_preview(url, title)
     if file_path:
         try:
