@@ -22,6 +22,7 @@ DB_FILE = 'yt_music.db'
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('''CREATE TABLE IF NOT EXISTS queues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id INTEGER,
     song_title TEXT,
     song_url TEXT,
@@ -61,7 +62,11 @@ def can_claim_bonus(user_id):
     return last_date < today
 
 def claim_bonus(user_id):
-    bonus_songs = random.choice(['Happy - Pharrell Williams', 'Shape of You - Ed Sheeran', 'Despacito - Luis Fonsi'])
+    bonus_songs = random.choice([
+        ('Happy - Pharrell Williams', 'https://www.youtube.com/watch?v=ZbZSe6N_BXs'),
+        ('Shape of You - Ed Sheeran', 'https://www.youtube.com/watch?v=JGwWNGJdvx8'),
+        ('Despacito - Luis Fonsi', 'https://www.youtube.com/watch?v=kJQP7kiw5Fk')
+    ])
     cursor.execute("INSERT OR REPLACE INTO users (user_id, daily_bonus_claimed) VALUES (?, ?)", (user_id, datetime.now().date().strftime('%Y-%m-%d')))
     conn.commit()
     return bonus_songs
@@ -77,9 +82,10 @@ async def search_yt_music(query, max_results=5):
             results = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)['entries']
             songs = []
             for entry in results:
+                song_id = entry['id']
                 songs.append({
                     'title': entry['title'],
-                    'url': f"https://www.youtube.com/watch?v={entry['id']}",
+                    'url': f"https://www.youtube.com/watch?v={song_id}",
                     'duration': entry.get('duration', 0)
                 })
             return songs
@@ -93,10 +99,10 @@ async def download_preview(url, title):
         'outtmpl': 'temp.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'ogg',  # For voice message
+            'preferredcodec': 'ogg',
             'preferredquality': '64',
         }],
-        'postprocessor_args': ['-ss', '0', '-t', '30'],  # 30s preview
+        'postprocessor_args': ['-ss', '0', '-t', '30'],
         'quiet': True,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -111,7 +117,6 @@ async def download_preview(url, title):
 async def play_next_song(context, chat_id):
     queue = get_queue(chat_id)
     if not queue:
-        await context.bot.send_message(chat_id=chat_id, text='🎵 **Queue trống!** Thêm bài hát đi.')
         return
     title, url = queue[0]
     file_path, song_title = await download_preview(url, title)
@@ -120,9 +125,14 @@ async def play_next_song(context, chat_id):
             await context.bot.send_voice(chat_id=chat_id, voice=audio, caption=f'🎵 **Đang chơi: {song_title}** (preview 30s)')
         os.remove(file_path)
         mark_played(chat_id)
+        # Loop next if queue still has songs
+        if get_queue(chat_id):
+            asyncio.create_task(play_next_song(context, chat_id))
     else:
-        await context.bot.send_message(chat_id=chat_id, text=f'❌ **Lỗi play {title}!** Thử bài khác.')
-    asyncio.create_task(play_next_song(context, chat_id))
+        await context.bot.send_message(chat_id=chat_id, text=f'❌ **Lỗi play {title}!** Skip to next.')
+        mark_played(chat_id)
+        if get_queue(chat_id):
+            asyncio.create_task(play_next_song(context, chat_id))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -147,8 +157,7 @@ def get_main_keyboard():
         [InlineKeyboardButton("⏭ Skip Bài", callback_data='music_skip')],
         [InlineKeyboardButton("🎁 Daily Bonus", callback_data='music_bonus')],
         [InlineKeyboardButton("🗑️ Clear Queue", callback_data='music_clear')],
-        [InlineKeyboardButton("ℹ️ Hướng dẫn", callback_data='music_help')],
-        [InlineKeyboardButton("🔙 Menu Trò Chơi", callback_data='back_games')]  # Nếu có game
+        [InlineKeyboardButton("ℹ️ Hướng dẫn", callback_data='music_help')]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -177,16 +186,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == 'music_skip':
-        skip_song(chat_id)
+        mark_played(chat_id)  # Skip current
         await context.bot.send_message(chat_id=chat_id, text='⏭ **Skip bài thành công!** Playing next...', reply_markup=get_menu_keyboard())
         asyncio.create_task(play_next_song(context, chat_id))
         return
 
     if query.data == 'music_bonus':
         if can_claim_bonus(user_id):
-            bonus_song = claim_bonus(user_id)
-            add_to_queue(chat_id, bonus_song, f"https://www.youtube.com/results?search_query={bonus_song.replace(' ', '+')}", user_id)
-            await context.bot.send_message(chat_id=chat_id, text=f'🎁 **Daily Bonus: {bonus_song}!** Added to queue.\nPlaying now...', reply_markup=get_menu_keyboard())
+            bonus_title, bonus_url = claim_bonus(user_id)
+            add_to_queue(chat_id, bonus_title, bonus_url, user_id)
+            await context.bot.send_message(chat_id=chat_id, text=f'🎁 **Daily Bonus: {bonus_title}!** Added to queue.\nPlaying now...', reply_markup=get_menu_keyboard())
             asyncio.create_task(play_next_song(context, chat_id))
         else:
             await context.bot.send_message(chat_id=chat_id, text='🎁 **Daily bonus hôm nay đã nhận rồi!**\nMai quay lại nhé 😊', reply_markup=get_menu_keyboard())
@@ -225,26 +234,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = parts[2]
         title = parts[3].replace("_", " ") if len(parts) > 3 else 'Unknown'
         add_to_queue(chat_id, title, url, user_id)
-        await context.bot.send_message(chat_id=chat_id, text=f'🎵 **Added to queue: {title}**\nPlaying preview...', reply_markup=get_menu_keyboard())
+        await context.bot.send_message(chat_id=chat_id, text=f'🎵 **Added to queue: {title}**\nPlaying preview 30s...', reply_markup=get_menu_keyboard())
         asyncio.create_task(play_next_song(context, chat_id))
         return
 
-# Command /music
 async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text('Sử dụng /music <tên bài hát>')
         return
     query_text = ' '.join(context.args)
-    songs = await search_yt_music(query_text, 1)
-    if songs:
-        song = songs[0]
-        add_to_queue(update.effective_chat.id, song['title'], song['url'], update.effective_user.id)
-        await update.message.reply_text(f'🎵 **Added: {song["title"]}** ({song["duration"]}s)\nPlaying preview...')
-        asyncio.create_task(play_next_song(context, update.effective_chat.id))
-    else:
+    songs = await search_yt_music(query_text, 5)
+    if not songs:
         await update.message.reply_text('❌ Không tìm thấy! Thử từ khóa khác.')
+        return
+    keyboard = []
+    for song in songs:
+        callback = f'music_add_{song["url"]}_{song["title"].replace(" ", "_")}'
+        keyboard.append([InlineKeyboardButton(f"{song['title'][:30]}... ({song['duration']}s)", callback_data=callback)])
+    keyboard.append([InlineKeyboardButton("🔙 Menu", callback_data='music_menu')])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    msg = '🎵 **Kết quả search YT:**\nChọn bài để add queue (preview 30s).'
+    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
 
-# Handle search input
 async def handle_music_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'waiting_search' not in context.user_data:
         return
