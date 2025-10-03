@@ -5,7 +5,11 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 import yt_dlp
 
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_TOKEN_HERE')  # Thay token thật
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+
+if not TOKEN:
+    print("Lỗi: Không tìm thấy TELEGRAM_BOT_TOKEN.")
+    exit(1)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -14,7 +18,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎵 **Bot Nghe Nhạc YT Đơn Giản!** 🎧
 
 Chào anh! Gõ /music <tên bài> (ví dụ /music Despacito) để search YT.
-Bot hiện 5 kết quả, ấn nút để nghe preview 30s voice.
+Bot hiện 5 kết quả, ấn nút để nghe preview 30s voice ngay.
 
 Chỉ vậy thôi, chill nghe nhạc đi! 😎
     """
