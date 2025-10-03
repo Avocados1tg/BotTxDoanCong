@@ -37,8 +37,11 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS users (
 conn.commit()
 
 def get_queue(chat_id):
-    cursor.execute("SELECT song_title, song_url FROM queues WHERE chat_id = ? AND played = FALSE ORDER BY added_at", (chat_id,))
-    return [(row[0], row[1]) for row in cursor.fetchall()]
+    cursor.execute("SELECT song_title, song_url FROM queues WHERE chat_id = ? AND played = FALSE ORDER BY added_at LIMIT 1", (chat_id,))
+    row = cursor.fetchone()
+    if row:
+        return row[0], row[1]
+    return None, None
 
 def add_to_queue(chat_id, title, url, added_by):
     cursor.execute("INSERT INTO queues (chat_id, song_title, song_url, added_by) VALUES (?, ?, ?, ?)", (chat_id, title, url, added_by))
@@ -62,14 +65,11 @@ def can_claim_bonus(user_id):
     return last_date < today
 
 def claim_bonus(user_id):
-    bonus_songs = random.choice([
-        ('Happy - Pharrell Williams', 'https://www.youtube.com/watch?v=ZbZSe6N_BXs'),
-        ('Shape of You - Ed Sheeran', 'https://www.youtube.com/watch?v=JGwWNGJdvx8'),
-        ('Despacito - Luis Fonsi', 'https://www.youtube.com/watch?v=kJQP7kiw5Fk')
-    ])
+    bonus_title = random.choice(['Happy - Pharrell Williams', 'Shape of You - Ed Sheeran', 'Despacito - Luis Fonsi'])
+    bonus_url = f"https://www.youtube.com/results?search_query={bonus_title.replace(' ', '+')}"
     cursor.execute("INSERT OR REPLACE INTO users (user_id, daily_bonus_claimed) VALUES (?, ?)", (user_id, datetime.now().date().strftime('%Y-%m-%d')))
     conn.commit()
-    return bonus_songs
+    return bonus_title, bonus_url
 
 async def search_yt_music(query, max_results=5):
     ydl_opts = {
@@ -115,21 +115,28 @@ async def download_preview(url, title):
             return None, None
 
 async def play_next_song(context, chat_id):
-    queue = get_queue(chat_id)
-    if not queue:
-        return
-    title, url = queue[0]
+    title, url = get_queue(chat_id)
+    if not title:
+        return  # Không queue thì dừng, không spam
     file_path, song_title = await download_preview(url, title)
     if file_path:
-        with open(file_path, 'rb') as audio:
-            await context.bot.send_voice(chat_id=chat_id, voice=audio, caption=f'🎵 **Đang chơi: {song_title}** (preview 30s)')
-        os.remove(file_path)
-        mark_played(chat_id)
-        # Loop next if queue still has songs
-        if get_queue(chat_id):
-            asyncio.create_task(play_next_song(context, chat_id))
+        try:
+            with open(file_path, 'rb') as audio:
+                await context.bot.send_voice(chat_id=chat_id, voice=audio, caption=f'🎵 **Đang chơi: {song_title}** (preview 30s)')
+            os.remove(file_path)
+            mark_played(chat_id)
+            # Chỉ gọi next nếu còn queue
+            next_title, _ = get_queue(chat_id)
+            if next_title:
+                asyncio.create_task(play_next_song(context, chat_id))
+        except Exception as e:
+            logging.error(f"Send voice error: {e}")
+            await context.bot.send_message(chat_id=chat_id, text=f'❌ **Lỗi play {song_title}!** Gửi link YT: {url}')
+            mark_played(chat_id)
+            if get_queue(chat_id):
+                asyncio.create_task(play_next_song(context, chat_id))
     else:
-        await context.bot.send_message(chat_id=chat_id, text=f'❌ **Lỗi play {title}!** Skip to next.')
+        await context.bot.send_message(chat_id=chat_id, text=f'❌ **Lỗi download {title}!** Gửi link YT: {url}')
         mark_played(chat_id)
         if get_queue(chat_id):
             asyncio.create_task(play_next_song(context, chat_id))
@@ -186,9 +193,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == 'music_skip':
-        mark_played(chat_id)  # Skip current
-        await context.bot.send_message(chat_id=chat_id, text='⏭ **Skip bài thành công!** Playing next...', reply_markup=get_menu_keyboard())
-        asyncio.create_task(play_next_song(context, chat_id))
+        title, _ = get_queue(chat_id)
+        if title:
+            mark_played(chat_id)
+            await context.bot.send_message(chat_id=chat_id, text=f'⏭ **Skipped {title}!** Playing next...', reply_markup=get_menu_keyboard())
+            asyncio.create_task(play_next_song(context, chat_id))
+        else:
+            await context.bot.send_message(chat_id=chat_id, text='⏭ **Không có bài nào để skip!**', reply_markup=get_menu_keyboard())
         return
 
     if query.data == 'music_bonus':
