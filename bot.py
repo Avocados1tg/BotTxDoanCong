@@ -17,8 +17,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 # Tùy chỉnh: Danh sách emoji Dice (mở rộng: random 3 loại)
 DICE_EMOJIS = ['🎲', '⚽', '🏀']
 
-# Tùy chỉnh: GIF animation mới (lắc xúc xắc vàng từ Giphy)
-CUSTOM_GIF_URL = 'https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif'
+# Tùy chỉnh: GIF animation mới (lắc 3 dice classic từ Giphy - khác với cái cũ)
+CUSTOM_GIF_URL = 'https://media.giphy.com/media/l0HlRnAWXxn0MhKLK/giphy.gif'
 
 # Sticker win/lose (placeholder - thay bằng file_id thật!)
 WIN_STICKER = 'CAACAgIAAxkBAAIB...win_celebration_file_id'  # Ví dụ sticker thắng
@@ -49,8 +49,8 @@ def get_amount_keyboard(balance):
     return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if 'balance' not in context.user_data:
-        context.user_data['balance'] = DEFAULT_BALANCE
+    context.user_data['balance'] = DEFAULT_BALANCE  # Force set để tránh 0
+    logging.info(f'Init balance cho user {update.effective_user.id}: {context.user_data["balance"]}')
     reply_markup = get_main_keyboard()
     await update.message.reply_text(
         f'Chào mừng! Bot TX với animation tùy chỉnh đầy đủ (tỷ lệ 1:0.9).\nSố dư: {int(context.user_data["balance"]):,} VND 💰\nBấm nút dưới để chơi!',
@@ -58,12 +58,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    balance = context.user_data.get('balance', DEFAULT_BALANCE)
+    if 'balance' not in context.user_data:
+        context.user_data['balance'] = DEFAULT_BALANCE  # Fix nếu thiếu
+    balance = context.user_data['balance']
+    logging.info(f'Check balance cho user {update.effective_user.id}: {balance}')
     reply_markup = get_main_keyboard()
     await update.message.reply_text(f'Số dư hiện tại: {int(balance):,} VND 💰', reply_markup=reply_markup)
 
 async def reset_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['balance'] = DEFAULT_BALANCE
+    context.user_data['balance'] = DEFAULT_BALANCE  # Force set
+    logging.info(f'Reset balance cho user {update.effective_user.id}: {context.user_data["balance"]}')
     reply_markup = get_main_keyboard()
     await update.message.reply_text(f'Đã reset số dư về {int(DEFAULT_BALANCE):,} VND! 🎉', reply_markup=reply_markup)
 
@@ -71,6 +75,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'balance' not in context.user_data:
         context.user_data['balance'] = DEFAULT_BALANCE
     balance = context.user_data['balance']
+    logging.info(f'Play check balance cho user {update.effective_user.id}: {balance}')
     if balance <= 0:
         reply_markup = get_main_keyboard()
         await update.message.reply_text('Hết tiền rồi! Bấm 🔄 Reset để chơi tiếp.', reply_markup=reply_markup)
@@ -82,7 +87,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Xỉu 🎲", callback_data='bet_xiu')]
     ]
     reply_markup_inline = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text('Chọn cược của bạn:', reply_markup=reply_markup_inline)
+    await update.message.reply_text('Chọn cược của bạn:', reply_markup=reply_markup_inline)  # Không cần ReplyKeyboard ở đây, sẽ có ở bước sau
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -94,10 +99,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['bet'] = bet
         balance = context.user_data['balance']
         amount_keyboard = get_amount_keyboard(balance)
+        reply_markup_main = get_main_keyboard()  # Thêm nút dưới cho message edit
         await query.edit_message_text(
             f'Bạn chọn {bet.title()}. Chọn số tiền cược sẵn:\nSố dư: {int(balance):,} VND',
-            reply_markup=amount_keyboard
+            reply_markup=amount_keyboard  # Inline trên
+            # ReplyKeyboard dưới sẽ tự hiện nếu đã set trước đó, nhưng để chắc, có thể gửi message riêng nếu cần
         )
+        # Gửi message riêng với ReplyKeyboard để đảm bảo nút dưới hiện (fix theo ảnh)
+        await query.message.reply_text('Bấm nút dưới để tiếp tục sau khi chọn cược!', reply_markup=reply_markup_main)
     
     elif query.data.startswith('amount_'):
         # Xử lý chọn amount
@@ -119,6 +128,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Trừ tiền cược trước
         context.user_data['balance'] -= amount
+        logging.info(f'Cược {amount} cho user {query.from_user.id}, balance mới: {context.user_data["balance"]}')
         
         # Text animation: Loading message
         loading_msg = await context.bot.send_message(chat_id=query.message.chat_id, text='⏳ Đang lắc... Lắc lắc! 🎲')
@@ -128,7 +138,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Bắt đầu chat action
         await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.RECORD_VIDEO)
         
-        # GIF tùy chỉnh
+        # GIF tùy chỉnh mới
         try:
             await context.bot.send_animation(
                 chat_id=query.message.chat_id,
@@ -136,7 +146,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption='Đang lắc xúc xắc tùy chỉnh... ⏳'
             )
             use_dice = False
-            logging.info('GIF gửi thành công')
+            logging.info('GIF mới gửi thành công')
         except Exception as e:
             logging.info(f'GIF lỗi: {e}, fallback Dice')
             use_dice = True
@@ -207,7 +217,7 @@ def main():
     # Message handler cho nút menu
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print('Bot đang chạy với animation tùy chỉnh đầy đủ (emoji random, GIF mới, loading text, sticker win/lose)...')
+    print('Bot đang chạy với fix balance, nút dưới đầy đủ và GIF mới...')
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
