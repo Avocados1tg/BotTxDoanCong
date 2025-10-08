@@ -14,14 +14,21 @@ if not TOKEN:
 # Bật logging để debug (tùy chọn)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Tùy chỉnh: Danh sách emoji Dice
-DICE_EMOJIS = ['🎲', '🎯']
+# Tùy chỉnh: Danh sách emoji Dice (mở rộng: random 3 loại)
+DICE_EMOJIS = ['🎲', '⚽', '🏀']
 
-# Tùy chỉnh: URL hoặc file_id GIF animation
-CUSTOM_GIF_URL = 'https://media.tenor.com/5oN8f0y3y0AAAAAC/dice-roll.gif'
+# Tùy chỉnh: GIF animation mới (lắc xúc xắc vàng từ Giphy)
+CUSTOM_GIF_URL = 'https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif'
+
+# Sticker win/lose (placeholder - thay bằng file_id thật!)
+WIN_STICKER = 'CAACAgIAAxkBAAIB...win_celebration_file_id'  # Ví dụ sticker thắng
+LOSE_STICKER = 'CAACAgIAAxkBAAIB...sad_lose_file_id'  # Ví dụ sticker thua
 
 # Balance mặc định
-DEFAULT_BALANCE = 10000.0  # 10.000 VND (float để hỗ trợ thập phân)
+DEFAULT_BALANCE = 100000.0  # 100.000 VND
+
+# Preset amounts cho nút cược
+PRESET_AMOUNTS = [1000, 5000, 10000, 50000]  # Thêm/bớt tùy ý
 
 # Tạo menu chính (ReplyKeyboard)
 def get_main_keyboard():
@@ -32,24 +39,33 @@ def get_main_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
+# Tạo nút preset cược dựa trên balance
+def get_amount_keyboard(balance):
+    keyboard = []
+    for amt in PRESET_AMOUNTS:
+        if amt <= balance:
+            keyboard.append([InlineKeyboardButton(f"{amt:,} VND", callback_data=f'amount_{amt}')])
+    keyboard.append([InlineKeyboardButton("All-in 💥", callback_data='amount_all')])
+    return InlineKeyboardMarkup(keyboard)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'balance' not in context.user_data:
         context.user_data['balance'] = DEFAULT_BALANCE
     reply_markup = get_main_keyboard()
     await update.message.reply_text(
-        f'Chào mừng! Bot TX với nút bấm dễ dùng (tỷ lệ 1:0.9).\nSố dư: {int(context.user_data["balance"])} VND 💰\nBấm nút dưới để chơi!',
+        f'Chào mừng! Bot TX với animation tùy chỉnh đầy đủ (tỷ lệ 1:0.9).\nSố dư: {int(context.user_data["balance"]):,} VND 💰\nBấm nút dưới để chơi!',
         reply_markup=reply_markup
     )
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = context.user_data.get('balance', DEFAULT_BALANCE)
     reply_markup = get_main_keyboard()
-    await update.message.reply_text(f'Số dư hiện tại: {int(balance)} VND 💰', reply_markup=reply_markup)
+    await update.message.reply_text(f'Số dư hiện tại: {int(balance):,} VND 💰', reply_markup=reply_markup)
 
 async def reset_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['balance'] = DEFAULT_BALANCE
     reply_markup = get_main_keyboard()
-    await update.message.reply_text(f'Đã reset số dư về {int(DEFAULT_BALANCE)} VND! 🎉', reply_markup=reply_markup)
+    await update.message.reply_text(f'Đã reset số dư về {int(DEFAULT_BALANCE):,} VND! 🎉', reply_markup=reply_markup)
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'balance' not in context.user_data:
@@ -67,20 +83,106 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup_inline = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text('Chọn cược của bạn:', reply_markup=reply_markup_inline)
-    context.user_data['waiting_bet'] = True
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    if context.user_data.get('waiting_bet'):
+    if query.data.startswith('bet_'):
+        # Xử lý chọn Tài/Xỉu
         bet = 'tài' if query.data == 'bet_tai' else 'xỉu'
         context.user_data['bet'] = bet
         balance = context.user_data['balance']
-        await query.edit_message_text(f'Bây giờ gõ số tiền cược (VND, ví dụ: 1000). Số dư hiện tại: {int(balance)} VND')
-        # Chờ message tiếp theo cho cược
-        context.user_data['waiting_amount'] = True
-        del context.user_data['waiting_bet']
+        amount_keyboard = get_amount_keyboard(balance)
+        await query.edit_message_text(
+            f'Bạn chọn {bet.title()}. Chọn số tiền cược sẵn:\nSố dư: {int(balance):,} VND',
+            reply_markup=amount_keyboard
+        )
+    
+    elif query.data.startswith('amount_'):
+        # Xử lý chọn amount
+        if not context.user_data.get('bet'):
+            await query.answer('Chưa chọn Tài/Xỉu! Bấm /play lại.')
+            return
+        
+        bet = context.user_data['bet']
+        balance = context.user_data['balance']
+        
+        if query.data == 'amount_all':
+            amount = balance
+        else:
+            amount = float(query.data.split('_')[1])
+        
+        if amount > balance or amount <= 0:
+            await query.answer('Số tiền không hợp lệ!')
+            return
+        
+        # Trừ tiền cược trước
+        context.user_data['balance'] -= amount
+        
+        # Text animation: Loading message
+        loading_msg = await context.bot.send_message(chat_id=query.message.chat_id, text='⏳ Đang lắc... Lắc lắc! 🎲')
+        await asyncio.sleep(2)  # Chờ 2s cho hiệu ứng
+        await loading_msg.delete()  # Xóa loading
+        
+        # Bắt đầu chat action
+        await context.bot.send_chat_action(chat_id=query.message.chat_id, action=ChatAction.RECORD_VIDEO)
+        
+        # GIF tùy chỉnh
+        try:
+            await context.bot.send_animation(
+                chat_id=query.message.chat_id,
+                animation=CUSTOM_GIF_URL,
+                caption='Đang lắc xúc xắc tùy chỉnh... ⏳'
+            )
+            use_dice = False
+            logging.info('GIF gửi thành công')
+        except Exception as e:
+            logging.info(f'GIF lỗi: {e}, fallback Dice')
+            use_dice = True
+        
+        if use_dice:
+            # Dice animation với emoji random mở rộng
+            dice_values = []
+            num_dice = 3  # Số Dice (dễ chỉnh)
+            for _ in range(num_dice):
+                emoji = random.choice(DICE_EMOJIS)
+                dice_msg = await context.bot.send_dice(
+                    chat_id=query.message.chat_id,
+                    emoji=emoji
+                )
+                await asyncio.sleep(0.5)  # Delay mượt
+                dice_values.append(dice_msg.dice.value)
+        else:
+            # Random thủ công nếu dùng GIF
+            dice_values = [random.randint(1, 6) for _ in range(3)]
+        
+        total = sum(dice_values)
+        result = 'Tài' if total >= 11 else 'Xỉu'
+        win = (bet == result.lower())
+        
+        message = f'🎲 Xúc xắc: {dice_values[0]}, {dice_values[1]}, {dice_values[2]}\nTổng: {total}\nKết quả: {result}\n'
+        reply_markup = get_main_keyboard()
+        if win:
+            win_amount = amount * 0.9
+            context.user_data['balance'] += amount + win_amount  # + gốc + thắng (1:0.9)
+            message += f'Bạn thắng! +{int(win_amount):,} VND\nSố dư mới: {int(context.user_data["balance"]):,} VND 🎉'
+            # Gửi sticker win
+            try:
+                await context.bot.send_sticker(chat_id=query.message.chat_id, sticker=WIN_STICKER)
+            except Exception:
+                logging.info('Sticker win lỗi, bỏ qua')
+        else:
+            message += f'Bạn thua! -{int(amount):,} VND\nSố dư mới: {int(context.user_data["balance"]):,} VND 😔'
+            # Gửi sticker lose
+            try:
+                await context.bot.send_sticker(chat_id=query.message.chat_id, sticker=LOSE_STICKER)
+            except Exception:
+                logging.info('Sticker lose lỗi, bỏ qua')
+        message += '\nBấm nút dưới để tiếp tục!'
+        
+        await query.message.reply_text(message, reply_markup=reply_markup)
+        del context.user_data['bet']
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -92,79 +194,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await balance(update, context)
     elif text == "🔄 Reset":
         await reset_balance(update, context)
-    
-    # Xử lý tiền cược (nếu đang chờ)
-    elif context.user_data.get('waiting_amount'):
-        try:
-            amount = float(update.message.text.strip())
-            balance = context.user_data['balance']
-            if amount <= 0 or amount > balance:
-                reply_markup = get_main_keyboard()
-                await update.message.reply_text(f'Cược không hợp lệ! Phải từ 1 đến {int(balance)} VND.', reply_markup=reply_markup)
-                return
-            bet = context.user_data['bet']
-            
-            # Trừ tiền cược trước
-            context.user_data['balance'] -= amount
-            
-            # Bắt đầu animation
-            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.RECORD_VIDEO)
-            
-            try:
-                await context.bot.send_animation(
-                    chat_id=update.effective_chat.id,
-                    animation=CUSTOM_GIF_URL,
-                    caption='Đang lắc xúc xắc... ⏳'
-                )
-                use_dice = False
-            except Exception:
-                use_dice = True
-            
-            if use_dice:
-                dice_values = []
-                for _ in range(3):
-                    emoji = random.choice(DICE_EMOJIS)
-                    dice_msg = await context.bot.send_dice(
-                        chat_id=update.effective_chat.id,
-                        emoji=emoji
-                    )
-                    await asyncio.sleep(0.5)
-                    dice_values.append(dice_msg.dice.value)
-            else:
-                dice_values = [random.randint(1, 6) for _ in range(3)]
-            
-            total = sum(dice_values)
-            result = 'Tài' if total >= 11 else 'Xỉu'
-            win = (bet == result.lower())
-            
-            message = f'🎲 Xúc xắc: {dice_values[0]}, {dice_values[1]}, {dice_values[2]}\nTổng: {total}\nKết quả: {result}\n'
-            reply_markup = get_main_keyboard()
-            if win:
-                win_amount = amount * 0.9
-                context.user_data['balance'] += amount + win_amount  # + gốc + thắng (1:0.9)
-                message += f'Bạn thắng! +{int(win_amount)} VND\nSố dư mới: {int(context.user_data["balance"])} VND 🎉'
-            else:
-                message += f'Bạn thua! -{int(amount)} VND\nSố dư mới: {int(context.user_data["balance"])} VND 😔'
-            message += '\nBấm nút dưới để tiếp tục!'
-            
-            await update.message.reply_text(message, reply_markup=reply_markup)
-            del context.user_data['waiting_amount']
-            del context.user_data['bet']
-        except ValueError:
-            reply_markup = get_main_keyboard()
-            await update.message.reply_text('Sai! Gõ số hợp lệ cho tiền cược (ví dụ: 1000).', reply_markup=reply_markup)
 
 def main():
     application = Application.builder().token(TOKEN).build()
     
-    # Command handlers (vẫn giữ cho tương thích)
+    # Command handlers
     application.add_handler(CommandHandler('start', start))
-    application.add_handler(CallbackQueryHandler(button_callback, pattern='^bet_'))
     
-    # Message handler cho nút và text
+    # Callback cho nút (bet_ và amount_)
+    application.add_handler(CallbackQueryHandler(button_callback, pattern='^(bet_|amount_)'))
+    
+    # Message handler cho nút menu
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print('Bot đang chạy với menu nút bấm đầy đủ...')
+    print('Bot đang chạy với animation tùy chỉnh đầy đủ (emoji random, GIF mới, loading text, sticker win/lose)...')
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
