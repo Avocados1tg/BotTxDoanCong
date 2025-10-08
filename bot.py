@@ -2,9 +2,9 @@ import logging
 import os
 import asyncio
 import random
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # Lấy token từ biến môi trường (Railway)
 TOKEN = os.environ.get('BOT_TOKEN')
@@ -14,81 +14,126 @@ if not TOKEN:
 # Bật logging để debug (tùy chọn)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Tùy chỉnh: Danh sách emoji Dice (thêm/bớt tùy ý)
-DICE_EMOJIS = ['🎲', '🎯']  # '🏀' value chỉ 1-5, tránh dùng nếu muốn 1-6 đầy đủ
+# Tùy chỉnh: Danh sách emoji Dice
+DICE_EMOJIS = ['🎲', '🎯']
 
-# Tùy chỉnh: URL hoặc file_id GIF animation (thay bằng file_id thật để ổn định)
-CUSTOM_GIF_URL = 'https://media.tenor.com/5oN8f0y3y0AAAAAC/dice-roll.gif'  # Ví dụ URL; tốt hơn dùng file_id
+# Tùy chỉnh: URL hoặc file_id GIF animation
+CUSTOM_GIF_URL = 'https://media.tenor.com/5oN8f0y3y0AAAAAC/dice-roll.gif'
+
+# Balance mặc định
+DEFAULT_BALANCE = 10000.0  # 10.000 VND (float để hỗ trợ thập phân)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Chào mừng! Bot TX với animation Dice nâng cao!\nGõ /play để bắt đầu. 🎲')
+    if 'balance' not in context.user_data:
+        context.user_data['balance'] = DEFAULT_BALANCE
+    await update.message.reply_text(f'Chào mừng! Bot TX với nút bấm và tiền ảo VND (Số dư: {int(context.user_data["balance"])} VND).\nGõ /play để chơi (tỷ lệ 1:0.9). /balance xem tiền. /reset reset tiền.')
+
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    balance = context.user_data.get('balance', DEFAULT_BALANCE)
+    await update.message.reply_text(f'Số dư hiện tại: {int(balance)} VND 💰')
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['balance'] = DEFAULT_BALANCE
+    await update.message.reply_text(f'Đã reset số dư về {int(DEFAULT_BALANCE)} VND!')
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Hãy chọn cược: "Tài" hoặc "Xỉu" (gõ chính xác nhé)!')
+    if 'balance' not in context.user_data:
+        context.user_data['balance'] = DEFAULT_BALANCE
+    balance = context.user_data['balance']
+    if balance <= 0:
+        await update.message.reply_text('Hết tiền rồi! Gõ /reset để chơi tiếp.')
+        return
+    
+    # Tạo nút bấm cho Tài/Xỉu
+    keyboard = [
+        [InlineKeyboardButton("Tài 💰", callback_data='bet_tai')],
+        [InlineKeyboardButton("Xỉu 🎲", callback_data='bet_xiu')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text('Chọn cược của bạn:', reply_markup=reply_markup)
     context.user_data['waiting_bet'] = True
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
     if context.user_data.get('waiting_bet'):
-        bet = update.message.text.strip().lower()
-        if bet in ['tài', 'xỉu']:
-            # Bắt đầu chat action "đang ghi animation"
+        bet = 'tài' if query.data == 'bet_tai' else 'xỉu'
+        context.user_data['bet'] = bet
+        balance = context.user_data['balance']
+        await query.edit_message_text(f'Bây giờ gõ số tiền cược (VND, ví dụ: 1000). Số dư hiện tại: {int(balance)} VND')
+        # Chờ message tiếp theo cho cược
+        context.user_data['waiting_amount'] = True
+        del context.user_data['waiting_bet']
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('waiting_amount'):
+        try:
+            amount = float(update.message.text.strip())
+            balance = context.user_data['balance']
+            if amount <= 0 or amount > balance:
+                await update.message.reply_text(f'Cược không hợp lệ! Phải từ 1 đến {int(balance)} VND.')
+                return
+            bet = context.user_data['bet']
+            
+            # Trừ tiền cược trước
+            context.user_data['balance'] -= amount
+            
+            # Bắt đầu animation
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.RECORD_VIDEO)
             
-            # Tùy chọn: Gửi custom GIF trước (nâng cao)
             try:
                 await context.bot.send_animation(
                     chat_id=update.effective_chat.id,
-                    animation=CUSTOM_GIF_URL,  # Hoặc file_id: 'file_id_here'
-                    caption='Đang lắc xúc xắc tùy chỉnh... ⏳'
+                    animation=CUSTOM_GIF_URL,
+                    caption='Đang lắc xúc xắc... ⏳'
                 )
-                use_dice = False  # Nếu dùng GIF, random value thủ công
+                use_dice = False
             except Exception:
-                await update.message.reply_text('Fallback về Dice built-in...')
                 use_dice = True
             
             if use_dice:
-                # Gửi 3 Dice animation nâng cao
                 dice_values = []
-                for i in range(3):
+                for _ in range(3):
                     emoji = random.choice(DICE_EMOJIS)
                     dice_msg = await context.bot.send_dice(
                         chat_id=update.effective_chat.id,
                         emoji=emoji
                     )
-                    await asyncio.sleep(0.5)  # Delay ngắn cho mượt
+                    await asyncio.sleep(0.5)
                     dice_values.append(dice_msg.dice.value)
             else:
-                # Random thủ công nếu dùng GIF (3 xúc xắc 1-6)
                 dice_values = [random.randint(1, 6) for _ in range(3)]
             
-            # Tính tổng
             total = sum(dice_values)
             result = 'Tài' if total >= 11 else 'Xỉu'
             win = (bet == result.lower())
             
-            # Message kết quả (bỏ bộ ba)
             message = f'🎲 Xúc xắc: {dice_values[0]}, {dice_values[1]}, {dice_values[2]}\nTổng: {total}\nKết quả: {result}\n'
             if win:
-                message += 'Bạn thắng! 🎉 Chơi tiếp /play'
+                win_amount = amount * 0.9
+                context.user_data['balance'] += amount + win_amount  # + gốc + thắng (1:0.9)
+                message += f'Bạn thắng! +{int(win_amount)} VND\nSố dư mới: {int(context.user_data["balance"])} VND 🎉\nChơi tiếp /play'
             else:
-                message += 'Bạn thua! 😔 Thử lại /play'
+                message += f'Bạn thua! -{int(amount)} VND\nSố dư mới: {int(context.user_data["balance"])} VND 😔\nThử lại /play'
             
             await update.message.reply_text(message)
-            del context.user_data['waiting_bet']
-        else:
-            await update.message.reply_text('Sai rồi! Hãy gõ "Tài" hoặc "Xỉu" thôi.')
+            del context.user_data['waiting_amount']
+            del context.user_data['bet']
+        except ValueError:
+            await update.message.reply_text('Sai! Gõ số hợp lệ cho tiền cược (ví dụ: 1000).')
 
 def main():
-    # Tạo application
     application = Application.builder().token(TOKEN).build()
     
-    # Thêm handlers
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('play', play))
+    application.add_handler(CommandHandler('balance', balance))
+    application.add_handler(CommandHandler('reset', reset))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern='^bet_'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Chạy bot
-    print('Bot đang chạy với animation Dice nâng cao (bỏ bộ ba)...')
+    print('Bot đang chạy với nút bấm, tiền ảo VND và tỷ lệ 1:0.9...')
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
