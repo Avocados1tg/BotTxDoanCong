@@ -2,7 +2,7 @@ import logging
 import os
 import asyncio
 import random
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
@@ -23,34 +23,50 @@ CUSTOM_GIF_URL = 'https://media.tenor.com/5oN8f0y3y0AAAAAC/dice-roll.gif'
 # Balance mặc định
 DEFAULT_BALANCE = 10000.0  # 10.000 VND (float để hỗ trợ thập phân)
 
+# Tạo menu chính (ReplyKeyboard)
+def get_main_keyboard():
+    keyboard = [
+        [KeyboardButton("🎲 Chơi")],
+        [KeyboardButton("💰 Số dư")],
+        [KeyboardButton("🔄 Reset")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'balance' not in context.user_data:
         context.user_data['balance'] = DEFAULT_BALANCE
-    await update.message.reply_text(f'Chào mừng! Bot TX với nút bấm và tiền ảo VND (Số dư: {int(context.user_data["balance"])} VND).\nGõ /play để chơi (tỷ lệ 1:0.9). /balance xem tiền. /reset reset tiền.')
+    reply_markup = get_main_keyboard()
+    await update.message.reply_text(
+        f'Chào mừng! Bot TX với nút bấm dễ dùng (tỷ lệ 1:0.9).\nSố dư: {int(context.user_data["balance"])} VND 💰\nBấm nút dưới để chơi!',
+        reply_markup=reply_markup
+    )
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = context.user_data.get('balance', DEFAULT_BALANCE)
-    await update.message.reply_text(f'Số dư hiện tại: {int(balance)} VND 💰')
+    reply_markup = get_main_keyboard()
+    await update.message.reply_text(f'Số dư hiện tại: {int(balance)} VND 💰', reply_markup=reply_markup)
 
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def reset_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['balance'] = DEFAULT_BALANCE
-    await update.message.reply_text(f'Đã reset số dư về {int(DEFAULT_BALANCE)} VND!')
+    reply_markup = get_main_keyboard()
+    await update.message.reply_text(f'Đã reset số dư về {int(DEFAULT_BALANCE)} VND! 🎉', reply_markup=reply_markup)
 
 async def play(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'balance' not in context.user_data:
         context.user_data['balance'] = DEFAULT_BALANCE
     balance = context.user_data['balance']
     if balance <= 0:
-        await update.message.reply_text('Hết tiền rồi! Gõ /reset để chơi tiếp.')
+        reply_markup = get_main_keyboard()
+        await update.message.reply_text('Hết tiền rồi! Bấm 🔄 Reset để chơi tiếp.', reply_markup=reply_markup)
         return
     
-    # Tạo nút bấm cho Tài/Xỉu
+    # Tạo nút Inline cho Tài/Xỉu
     keyboard = [
         [InlineKeyboardButton("Tài 💰", callback_data='bet_tai')],
         [InlineKeyboardButton("Xỉu 🎲", callback_data='bet_xiu')]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text('Chọn cược của bạn:', reply_markup=reply_markup)
+    reply_markup_inline = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text('Chọn cược của bạn:', reply_markup=reply_markup_inline)
     context.user_data['waiting_bet'] = True
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,12 +83,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del context.user_data['waiting_bet']
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('waiting_amount'):
+    text = update.message.text.strip()
+    
+    # Xử lý nút menu chính
+    if text == "🎲 Chơi":
+        await play(update, context)
+    elif text == "💰 Số dư":
+        await balance(update, context)
+    elif text == "🔄 Reset":
+        await reset_balance(update, context)
+    
+    # Xử lý tiền cược (nếu đang chờ)
+    elif context.user_data.get('waiting_amount'):
         try:
             amount = float(update.message.text.strip())
             balance = context.user_data['balance']
             if amount <= 0 or amount > balance:
-                await update.message.reply_text(f'Cược không hợp lệ! Phải từ 1 đến {int(balance)} VND.')
+                reply_markup = get_main_keyboard()
+                await update.message.reply_text(f'Cược không hợp lệ! Phải từ 1 đến {int(balance)} VND.', reply_markup=reply_markup)
                 return
             bet = context.user_data['bet']
             
@@ -110,30 +138,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             win = (bet == result.lower())
             
             message = f'🎲 Xúc xắc: {dice_values[0]}, {dice_values[1]}, {dice_values[2]}\nTổng: {total}\nKết quả: {result}\n'
+            reply_markup = get_main_keyboard()
             if win:
                 win_amount = amount * 0.9
                 context.user_data['balance'] += amount + win_amount  # + gốc + thắng (1:0.9)
-                message += f'Bạn thắng! +{int(win_amount)} VND\nSố dư mới: {int(context.user_data["balance"])} VND 🎉\nChơi tiếp /play'
+                message += f'Bạn thắng! +{int(win_amount)} VND\nSố dư mới: {int(context.user_data["balance"])} VND 🎉'
             else:
-                message += f'Bạn thua! -{int(amount)} VND\nSố dư mới: {int(context.user_data["balance"])} VND 😔\nThử lại /play'
+                message += f'Bạn thua! -{int(amount)} VND\nSố dư mới: {int(context.user_data["balance"])} VND 😔'
+            message += '\nBấm nút dưới để tiếp tục!'
             
-            await update.message.reply_text(message)
+            await update.message.reply_text(message, reply_markup=reply_markup)
             del context.user_data['waiting_amount']
             del context.user_data['bet']
         except ValueError:
-            await update.message.reply_text('Sai! Gõ số hợp lệ cho tiền cược (ví dụ: 1000).')
+            reply_markup = get_main_keyboard()
+            await update.message.reply_text('Sai! Gõ số hợp lệ cho tiền cược (ví dụ: 1000).', reply_markup=reply_markup)
 
 def main():
     application = Application.builder().token(TOKEN).build()
     
+    # Command handlers (vẫn giữ cho tương thích)
     application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('play', play))
-    application.add_handler(CommandHandler('balance', balance))
-    application.add_handler(CommandHandler('reset', reset))
     application.add_handler(CallbackQueryHandler(button_callback, pattern='^bet_'))
+    
+    # Message handler cho nút và text
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print('Bot đang chạy với nút bấm, tiền ảo VND và tỷ lệ 1:0.9...')
+    print('Bot đang chạy với menu nút bấm đầy đủ...')
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
